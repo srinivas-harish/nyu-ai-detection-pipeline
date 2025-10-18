@@ -6,6 +6,16 @@ import time
 
 import requests
 
+# Supported Gemini models (Oct 2025)
+GEMINI_SUPPORTED = [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-image",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+]
+
 
 def _extract_gemini_text(payload: dict) -> str:
     """Get text from Gemini JSON."""
@@ -36,11 +46,12 @@ def _extract_deepseek_text(payload: dict) -> str:
         return ""
 
 
-def _call_gemini(prompt: str, max_output: int, api_key: str, timeout: int = 60) -> str:
+def _call_gemini(prompt: str, max_output: int, api_key: str, model_name: str, timeout: int = 60) -> str:
     """Call Gemini."""
+    model_name = model_name or "gemini-1.5-flash"
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-pro:generateContent?key={api_key}"
+        f"{model_name}:generateContent?key={api_key}"
     )
     payload = {
         "contents": [{"parts": [{"text": str(prompt)}]}],
@@ -58,11 +69,11 @@ def _call_gemini(prompt: str, max_output: int, api_key: str, timeout: int = 60) 
         return "[parse-error] Non-JSON response from Gemini"
 
 
-def _call_deepseek(prompt: str, max_output: int, api_key: str, timeout: int = 60) -> str:
+def _call_deepseek(prompt: str, max_output: int, api_key: str, model_name: str = "deepseek-chat", timeout: int = 60) -> str:
     """Call DeepSeek."""
     url = "https://api.deepseek.com/chat/completions"
     payload = {
-        "model": "deepseek-chat",
+        "model": model_name or "deepseek-chat",
         "messages": [{"role": "user", "content": str(prompt)}],
         "max_tokens": int(max_output),
     }
@@ -88,25 +99,35 @@ def run_api(model: str, prompt: str, max_output: int = 512, api_key: str = "") -
     if not api_key:
         raise ValueError("--api key is required")
     start = time.time()
-    if model == "gemini":
-        out = _call_gemini(prompt, max_output, api_key)
+    if model.startswith("gemini"):
+        if model not in GEMINI_SUPPORTED:
+            raise ValueError(
+                "unsupported gemini model. choose one of: " + ", ".join(GEMINI_SUPPORTED)
+            )
+        out = _call_gemini(prompt, max_output, api_key, model)
         elapsed = time.time() - start
         print(f"API: gemini | Elapsed: {elapsed:.2f}s")
         print("Output:\n" + (out or ""))
         return out
-    elif model == "deepseek":
-        out = _call_deepseek(prompt, max_output, api_key)
+    elif model.startswith("deepseek"):
+        out = _call_deepseek(prompt, max_output, api_key, model)
         elapsed = time.time() - start
         print(f"API: deepseek | Elapsed: {elapsed:.2f}s")
         print("Output:\n" + (out or ""))
         return out
     else:
-        raise ValueError("--model must be either 'gemini' or 'deepseek'")
+        raise ValueError("--model must start with 'gemini' or 'deepseek'")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Unified API interface for Gemini and DeepSeek.")
-    p.add_argument("--model", required=True, choices=["gemini", "deepseek"], help="Which API to use")
+    p = argparse.ArgumentParser(description=(
+        "Unified API interface. Supported Gemini: " + ", ".join(GEMINI_SUPPORTED)
+    ))
+    p.add_argument(
+        "--model",
+        required=True,
+        help="Model id (e.g., gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-flash-image, gemini-2.0-flash, gemini-2.0-flash-lite, deepseek-chat)",
+    )
     p.add_argument("--prompt", required=True, help="Prompt text to send to the model")
     p.add_argument("--max_output", type=int, default=512, help="Maximum output tokens/length")
     p.add_argument("--api", required=True, help="API key string for the chosen provider")
