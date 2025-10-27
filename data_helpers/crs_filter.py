@@ -105,7 +105,8 @@ def _clean_html(text: str) -> str:
             tag.decompose()
         except Exception:
             continue
-    cleaned = soup.get_text(separator=" ", strip=True)
+    # keep paragraph breaks
+    cleaned = soup.get_text(separator="\n", strip=True)
     # Drop boilerplate
     for phrase in (
         "Source: Congressional Research Service,",
@@ -115,8 +116,20 @@ def _clean_html(text: str) -> str:
     ):
         while phrase in cleaned:
             cleaned = cleaned.replace(phrase, "")
-    # Normalize whitespace (crush newlines/tabs)
-    cleaned = " ".join(cleaned.split())
+    # normalize but retain blank lines
+    cleaned = cleaned.replace("\r", "\n")
+    lines = [ln.strip() for ln in cleaned.split("\n")]
+    out_lines = []
+    blank = 0
+    for ln in lines:
+        if ln:
+            out_lines.append(ln)
+            blank = 0
+        else:
+            if blank == 0:
+                out_lines.append("")
+            blank = 1
+    cleaned = "\n".join(out_lines)
     return cleaned.strip()
 
 
@@ -154,9 +167,9 @@ def _extract_fields(data: dict) -> tuple:
             seen.add(t)
             unique_texts.append(t)
 
-    # Clean + join
+    # Clean + join (preserve sections)
     cleaned_parts = [_clean_html(t) for t in unique_texts if t]
-    text = " ".join([p for p in cleaned_parts if p])
+    text = "\n\n".join([p for p in cleaned_parts if p])
     text = text.strip()
 
     return title or "", date or "", text or ""
@@ -179,17 +192,28 @@ def _save_csv_chunk(records: list, out_dir: str, chunk_index: int) -> str:
     return out_path
 
 
-def process_jsons(n: int, json_dir: str, out_dir: str) -> None:
-    """Process up to n JSON files into CSV chunks."""
+def process_jsons(
+    n: int,
+    json_dir: str,
+    out_dir: str,
+    min_words: int = 0,
+    target_tokens: int = 0,
+) -> tuple[int, int, int]:
+    """Process JSONs, keep rows >= min_words.
+
+    Stops when either kept == n (if n>0) or total_words >= target_tokens (if target_tokens>0).
+    Returns (processed, kept, total_words).
+    """
     files = _list_json_files(json_dir)
     if not files:
         print("[filter] No JSON files found to process.")
-        return
+        return (0, 0, 0)
 
-    to_process = files[:n]
+    to_process = files
     records = []
     total_words = 0
     processed = 0
+    kept = 0
 
     for idx, path in enumerate(to_process, start=1):
         data = _read_json(path)
@@ -202,29 +226,37 @@ def process_jsons(n: int, json_dir: str, out_dir: str) -> None:
             "text": text,
             "word_count": word_count,
         }
-        records.append(rec)
-        total_words += word_count
         processed += 1
+        if word_count >= max(0, int(min_words)):
+            records.append(rec)
+            total_words += word_count
+            kept += 1
 
         # Save chunk when reaching CHUNK_SIZE
-        if len(records) == CHUNK_SIZE:
+        stop_by_n = n and kept == n
+        stop_by_tokens = target_tokens and total_words >= target_tokens
+        if len(records) == CHUNK_SIZE or stop_by_n or stop_by_tokens:
             chunk_idx = (processed - 1) // CHUNK_SIZE
             out_path = _save_csv_chunk(records, out_dir, chunk_idx)
             print(f"[filter] Saved {out_path} ({len(records)} rows)")
             records = []
+            if stop_by_n or stop_by_tokens:
+                break
 
     # Save remaining records
-    if records:
+    if records and (not n or kept < n) and (not target_tokens or total_words < target_tokens):
         chunk_idx = (processed - 1) // CHUNK_SIZE
         out_path = _save_csv_chunk(records, out_dir, chunk_idx)
         print(f"[filter] Saved {out_path} ({len(records)} rows)")
 
-    print(f"[filter] Summary: processed={processed}, total_words={total_words}")
+    print(f"[filter] Summary: processed={processed}, kept={kept}, total_words={total_words}")
+    return (processed, kept, total_words)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Clean CRS JSONs into ML-ready CSVs.")
-    p.add_argument("--n", type=int, required=True, help="Number of JSON files to process")
+    p.add_argument("--n", type=int, default=0, help="Target rows to keep (after filtering)")
+    p.add_argument("--target_tokens", type=int, default=0, help="Stop when total kept tokens (words) reach this")
     p.add_argument("--out", default="./clean_data", help="Output directory for CSV files")
     p.add_argument(
         "--json_dir",
@@ -236,6 +268,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_BASE_URL,
         help="Base listing URL used to fetch JSONs if missing",
     )
+    p.add_argument("--min_words", type=int, default=0, help="Minimum word count to keep a report")
     return p
 
 
@@ -245,14 +278,53 @@ if __name__ == "__main__":
     # Ensure JSONs exist; if none, fetch automatically
     existing = _list_json_files(args.json_dir)
     if not existing:
-        print(
-            f"[filter] No JSONs found in {args.json_dir}. Fetching {args.n} using base={args.base}..."
-        )
-        crs_scraper.fetch_multiple(base_url=args.base, n=args.n, dest_dir=args.json_dir)
+        first_batch = max(args.n, 50)
+        print(f"[filter] No JSONs found in {args.json_dir}. Fetching {first_batch} using base={args.base}...")
+        crs_scraper.fetch_multiple(base_url=args.base, n=first_batch, dest_dir=args.json_dir)
     else:
-        print(f"[filter] Found {len(existing)} JSONs in {args.json_dir}; proceeding to clean.")
+        print(f"[filter] Found {len(existing)} JSONs in {args.json_dir}; proceeding.")
 
     start = time.time()
-    process_jsons(n=args.n, json_dir=args.json_dir, out_dir=args.out)
+    if not args.n and not args.target_tokens:
+        raise SystemExit("please provide --n or --target_tokens")
+
+    processed, kept, total_words = process_jsons(
+        n=args.n,
+        json_dir=args.json_dir,
+        out_dir=args.out,
+        min_words=args.min_words,
+        target_tokens=args.target_tokens,
+    )
+
+    attempts = 0
+    def _need_more() -> bool:
+        need_n = args.n and kept < args.n
+        need_tok = args.target_tokens and total_words < args.target_tokens
+        return (need_n or need_tok)
+
+    while _need_more() and attempts < 5 and args.base:
+        # heuristic: fetch more based on how far we are
+        missing_rows = max(0, (args.n - kept)) if args.n else 0
+        missing_tokens = max(0, (args.target_tokens - total_words)) if args.target_tokens else 0
+        batch = 100
+        if missing_rows:
+            batch = max(batch, missing_rows * 3)
+        if missing_tokens:
+            # assume ~1200 words/report avg when chasing targets
+            batch = max(batch, missing_tokens // 1200)
+        print(f"[filter] Need more data (kept={kept}, tokens={total_words}). Fetching +{batch}...")
+        crs_scraper.fetch_multiple(base_url=args.base, n=batch, dest_dir=args.json_dir)
+        processed, kept, total_words = process_jsons(
+            n=args.n,
+            json_dir=args.json_dir,
+            out_dir=args.out,
+            min_words=args.min_words,
+            target_tokens=args.target_tokens,
+        )
+        attempts += 1
+
     elapsed = time.time() - start
-    print(f"[filter] Done in {elapsed:.2f}s.")
+    goal = (
+        f"rows {kept}/{args.n}" if args.n else f"tokens {total_words}/{args.target_tokens}"
+    )
+    print(f"[filter] Done in {elapsed:.2f}s. Met goal: {goal}")

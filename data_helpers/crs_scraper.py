@@ -37,6 +37,21 @@ def _save_json(obj: dict, path: str) -> None:
         json.dump(obj, f, ensure_ascii=False)
 
 
+def _next_start_index(dest_dir: str) -> int:
+    """Find next report index to write (1-based)."""
+    max_idx = 0
+    if os.path.isdir(dest_dir):
+        for name in os.listdir(dest_dir):
+            if name.startswith("report_") and name.endswith(".json"):
+                try:
+                    idx = int(name[len("report_"):-len(".json")])
+                    if idx > max_idx:
+                        max_idx = idx
+                except Exception:
+                    continue
+    return max_idx + 1
+
+
 def _download_from_everycrsreport(n: int, dest_dir: str, csv_url: str = "https://www.everycrsreport.com/reports.csv") -> int:
     """Use EveryCRSReport CSV to save n JSONs."""
     print(f"[scraper] Using EveryCRSReport listing: {csv_url}")
@@ -56,6 +71,7 @@ def _download_from_everycrsreport(n: int, dest_dir: str, csv_url: str = "https:/
     reader = csv.DictReader(lines)
     base = "https://www.everycrsreport.com/"
     saved = 0
+    start_idx = _next_start_index(dest_dir)
 
     for i, row in enumerate(reader, start=1):
         if saved >= n:
@@ -67,7 +83,7 @@ def _download_from_everycrsreport(n: int, dest_dir: str, csv_url: str = "https:/
         data = fetch_json(full_url)
         if not data:
             continue
-        out_path = os.path.join(dest_dir, f"report_{saved+1}.json")
+        out_path = os.path.join(dest_dir, f"report_{start_idx + saved}.json")
         _save_json(data, out_path)
         saved += 1
         title = row.get("title") or data.get("title") or ""
@@ -92,6 +108,7 @@ def _extract_list_from_listing(payload: dict) -> list:
 def _download_from_crs_api(base_url: str, n: int, dest_dir: str) -> int:
     """Paged fetch + save n items."""
     saved = 0
+    start_idx = _next_start_index(dest_dir)
     page = 1
     print(f"[scraper] Using CRS API: {base_url}")
     while saved < n:
@@ -117,7 +134,7 @@ def _download_from_crs_api(base_url: str, n: int, dest_dir: str) -> int:
             # if item is not a dict, wrap to be JSON-serializable dict
             if not isinstance(item, dict):
                 item = {"data": item}
-            out_path = os.path.join(dest_dir, f"report_{saved+1}.json")
+            out_path = os.path.join(dest_dir, f"report_{start_idx + saved}.json")
             _save_json(item, out_path)
             saved += 1
             title = item.get("title") or ""
