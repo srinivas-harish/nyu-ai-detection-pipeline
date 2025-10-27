@@ -1,7 +1,6 @@
 """Mass conversion + sanity check for CRS data.
 
-Features
-- Sanity-only mode: count reports, tokens (tries real tokenizer), above-threshold items.
+Features 
 - Generation loop: iterate reports (CSV rows), split into sections, call models via api_runner.
 - Saves JSONL per model with enough metadata to reconstruct.
 
@@ -20,6 +19,7 @@ import json
 import os
 import re
 import time
+import random
 from typing import List, Tuple
 
 try:
@@ -57,6 +57,22 @@ PROMPTS: List[str] = [
     # 10
     "Rewrite the text below. Keep the structure and headings identical. Keep overall length within ±5 percent. Do not introduce new facts. Do not use bold, italics, or any formatting. Use lists only if the original includes lists. Output only the text.",
 ]
+
+class PromptCycler:
+    """Randomly cycles among the first K prompts every N API calls."""
+    def __init__(self, pool_size: int, every: int, seed: int | None = None):
+        self.pool_size = max(1, min(int(pool_size), len(PROMPTS)))
+        self.every = max(1, int(every))
+        self._rng = random.Random(seed)
+        self._count = 0
+        self._current_idx = self._rng.randrange(self.pool_size)
+
+    def next(self) -> tuple[int, str]:
+        if self._count > 0 and (self._count % self.every) == 0:
+            self._current_idx = self._rng.randrange(self.pool_size)
+        self._count += 1
+        # return 1-based id and the text
+        return self._current_idx + 1, PROMPTS[self._current_idx]
 
 
 def _load_csv_rows(input_dir: str) -> List[dict]:
@@ -319,11 +335,15 @@ def generate(
     prompt_id: int,
     min_words: int,
     target_tokens: int,
+    cycle_prompts: int = 0,
+    cycle_every: int = 0,
+    cycle_seed: int | None = None,
 ) -> None:
     os.makedirs(out_dir, exist_ok=True)
     rows = _load_csv_rows(input_csv_dir)
     tok = _get_tokenizer(models[0] if models else "gpt-4o-mini")
     prompt = PROMPTS[max(1, min(10, prompt_id)) - 1]
+    cycler = PromptCycler(pool_size=cycle_prompts, every=cycle_every or 3, seed=cycle_seed) if int(cycle_prompts) > 0 else None
     kept_tokens = 0
     temperature = 0.4
     top_p = 0.9
@@ -345,8 +365,12 @@ def generate(
             src_tok = max(1, tok(sec_body))
             max_out = max(128, int(src_tok * 1.05))
             for model in models:
+                if cycler is not None:
+                    used_idx, used_prompt = cycler.next()
+                else:
+                    used_idx, used_prompt = prompt_id, prompt
                 payload = (
-                    f"{prompt}\n\nTitle: {sec_title}\n\n" if sec_title else f"{prompt}\n\n"
+                    f"{used_prompt}\n\nTitle: {sec_title}\n\n" if sec_title else f"{used_prompt}\n\n"
                 ) + sec_body
                 key = _hash_key(report_id, str(idx), model, str(prompt_id))
                 outfile = os.path.join(out_dir, f"{model.replace('/', '_')}.jsonl")
@@ -357,7 +381,7 @@ def generate(
                 out_text = ""
                 for attempt in range(max_retries):
                     try:
-                        out_text = run_api(model, payload, max_output=max_out, keys_path=keys)
+                        out_text = run_api(model, payload, max_output=max_out, keys_path=keys, quiet=True)
                         break
                     except Exception as e:
                         out_text = f"[error] {e}"
@@ -371,6 +395,7 @@ def generate(
                     "section_title": sec_title,
                     "model": model,
                     "prompt_id": prompt_id,
+                    "prompt_id_used": used_idx,
                     "source_word_count": src_wc,
                     "source_token_est": src_tok,
                     "output_word_count": len((out_text or "").split()),
@@ -404,6 +429,9 @@ def first_tokens_csv(
     keys: str | None = None,
     sanity_model_hint: str = "gpt-4o-mini",
     prompt_id: int = 2,
+    cycle_prompts: int = 0,
+    cycle_every: int = 0,
+    cycle_seed: int | None = None,
 ) -> None:
     """Build two CSVs: original first N tokens, and AI-modified ones per model.
 
@@ -416,6 +444,7 @@ def first_tokens_csv(
     rows = _load_csv_rows(input_csv_dir)
     tok = _get_tokenizer(sanity_model_hint)
     prompt = PROMPTS[max(1, min(10, prompt_id)) - 1]
+    cycler = PromptCycler(pool_size=cycle_prompts, every=cycle_every or 3, seed=cycle_seed) if int(cycle_prompts) > 0 else None
     budget = int(first_tokens)
 
     # 1) Build a single concatenated original text up to N tokens
@@ -489,7 +518,11 @@ def first_tokens_csv(
             # Aim to at least match the source chunk length.
             # Some providers impose caps; they will truncate if needed.
             max_out = max(512, int(src_tok))
-            payload = f"{prompt}\n\n" + ch
+            if cycler is not None:
+                _, used_prompt = cycler.next()
+            else:
+                used_prompt = prompt
+            payload = f"{used_prompt}\n\n" + ch
             try:
                 out_text = run_api(model, payload, max_output=max_out, keys_path=keys, quiet=True)
             except Exception as e:
@@ -557,7 +590,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", required=False, default="./gen_out", help="Output folder for JSONL/CSV")
     p.add_argument("--models", required=False, default="", help="Comma-separated model ids (empty = originals only)")
     p.add_argument("--keys", required=False, default=os.path.join(os.path.dirname(__file__), "api_keys.txt"), help="Path to api_keys.txt")
-    p.add_argument("--prompt_id", type=int, default=2, help="Pick 1..10 prompt variant")
+    p.add_argument("--prompt_id", type=int, default=2, help="Pick 1..10 prompt variant (base)")
+    p.add_argument("--cycle_prompts", type=int, default=0, help="If >0, randomly cycle among the first K prompts")
+    p.add_argument("--cycle_every", type=int, default=3, help="Change prompt every N API calls when cycling")
+    p.add_argument("--cycle_seed", type=int, default=None, help="Seed for prompt cycling randomness")
     p.add_argument("--min_words", type=int, default=3000, help="Minimum words per report/section")
     p.add_argument("--target_tokens", type=int, default=0, help="Stop after this many source tokens (approx)")
     p.add_argument("--sanity_only", action="store_true", help="Run only sanity check and exit")
@@ -583,6 +619,9 @@ if __name__ == "__main__":
                 keys=args.keys,
                 sanity_model_hint=args.sanity_model,
                 prompt_id=args.prompt_id,
+                cycle_prompts=args.cycle_prompts,
+                cycle_every=args.cycle_every,
+                cycle_seed=args.cycle_seed,
             )
         else:
             if not models:
@@ -597,4 +636,7 @@ if __name__ == "__main__":
                 prompt_id=args.prompt_id,
                 min_words=args.min_words,
                 target_tokens=args.target_tokens,
+                cycle_prompts=args.cycle_prompts,
+                cycle_every=args.cycle_every,
+                cycle_seed=args.cycle_seed,
             )
