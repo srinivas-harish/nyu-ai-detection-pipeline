@@ -209,7 +209,7 @@ def _call_grok(prompt: str, max_output: int, api_key: str, model_name: str, time
         return "[parse-error] Non-JSON response from Grok"
 
 
-def run_api(model: str, prompt: str, max_output: int = 512, keys_path: str | None = None) -> str:
+def run_api(model: str, prompt: str, max_output: int = 512, keys_path: str | None = None, quiet: bool = True) -> str:
     """Single entry point usable from imports or CLI."""
     model = (model or "").strip().lower()
     keys = _load_keys(keys_path)
@@ -249,35 +249,40 @@ def run_api(model: str, prompt: str, max_output: int = 512, keys_path: str | Non
             )
         out = _call_gemini(prompt, max_output, api_key, model)
         elapsed = time.time() - start
-        print(f"API: gemini | Elapsed: {elapsed:.2f}s")
-        print("Output:\n" + (out or ""))
+        if not quiet:
+            print(f"API: gemini | Elapsed: {elapsed:.2f}s")
+            print("Output:\n" + (out or ""))
         return out
     elif model.startswith("deepseek"):
         out = _call_deepseek(prompt, max_output, api_key, model)
         elapsed = time.time() - start
-        print(f"API: deepseek | Elapsed: {elapsed:.2f}s")
-        print("Output:\n" + (out or ""))
+        if not quiet:
+            print(f"API: deepseek | Elapsed: {elapsed:.2f}s")
+            print("Output:\n" + (out or ""))
         return out
     elif model.startswith("chatgpt") or model.startswith("openai"):
         # allow "chatgpt" to map to default model
         model_name = model if model != "chatgpt" else DEFAULT_MODELS["chatgpt"]
         out = _call_openai(prompt, max_output, api_key, model_name)
         elapsed = time.time() - start
-        print(f"API: chatgpt | Elapsed: {elapsed:.2f}s")
-        print("Output:\n" + (out or ""))
+        if not quiet:
+            print(f"API: chatgpt | Elapsed: {elapsed:.2f}s")
+            print("Output:\n" + (out or ""))
         return out
     elif model.startswith("claude"):
         out = _call_claude(prompt, max_output, api_key, model)
         elapsed = time.time() - start
-        print(f"API: claude | Elapsed: {elapsed:.2f}s")
-        print("Output:\n" + (out or ""))
+        if not quiet:
+            print(f"API: claude | Elapsed: {elapsed:.2f}s")
+            print("Output:\n" + (out or ""))
         return out
     elif model.startswith("grok") or model.startswith("xai"):
         model_name = model if model != "grok" else DEFAULT_MODELS["grok"]
         out = _call_grok(prompt, max_output, api_key, model_name)
         elapsed = time.time() - start
-        print(f"API: grok | Elapsed: {elapsed:.2f}s")
-        print("Output:\n" + (out or ""))
+        if not quiet:
+            print(f"API: grok | Elapsed: {elapsed:.2f}s")
+            print("Output:\n" + (out or ""))
         return out
     else:
         raise ValueError("unsupported --model")
@@ -300,4 +305,4 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     args = _build_arg_parser().parse_args()
-    run_api(args.model, args.prompt, args.max_output, args.keys)
+    run_api(args.model, args.prompt, args.max_output, args.keys, quiet=False)
