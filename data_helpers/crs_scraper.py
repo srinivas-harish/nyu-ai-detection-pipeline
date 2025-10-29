@@ -7,6 +7,7 @@ import os
 import time
 
 import requests
+from bs4 import BeautifulSoup
 
 
 def fetch_json(url: str) -> dict:
@@ -36,23 +37,7 @@ def _save_json(obj: dict, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False)
 
-
-def _next_start_index(dest_dir: str) -> int:
-    """Find next report index to write (1-based)."""
-    max_idx = 0
-    if os.path.isdir(dest_dir):
-        for name in os.listdir(dest_dir):
-            if name.startswith("report_") and name.endswith(".json"):
-                try:
-                    idx = int(name[len("report_"):-len(".json")])
-                    if idx > max_idx:
-                        max_idx = idx
-                except Exception:
-                    continue
-    return max_idx + 1
-
-
-def _download_from_everycrsreport(n: int, dest_dir: str, csv_url: str = "https://www.everycrsreport.com/reports.csv") -> int:
+def _download_from_everycrsreport(n: int, dest_dir: str, csv_url: str = "https://www.everycrsreport.com/reports.csv"):
     """Use EveryCRSReport CSV to save n JSONs."""
     print(f"[scraper] Using EveryCRSReport listing: {csv_url}")
     try:
@@ -83,7 +68,34 @@ def _download_from_everycrsreport(n: int, dest_dir: str, csv_url: str = "https:/
         data = fetch_json(full_url)
         if not data:
             continue
-        out_path = os.path.join(dest_dir, f"report_{start_idx + saved}.json")
+
+        # Attempt to fetch and extract HTML content using CSV's latestHTML column
+        extracted_text = ""
+        html_rel = (row.get("latestHTML") or "").strip()
+        if html_rel:
+            html_url = base + html_rel
+            try:
+                resp = requests.get(html_url, timeout=60)
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for tag in soup.find_all(["table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption"]):
+                    try:
+                        tag.decompose()
+                    except Exception:
+                        pass
+                text = soup.get_text(separator=" ", strip=True)
+                extracted_text = " ".join(text.split()).strip()
+            except requests.exceptions.RequestException as e:
+                print(f"[scraper] html-fetch-error: {e}")
+            except Exception as e:
+                print(f"[scraper] html-parse-error: {e}")
+
+        if extracted_text:
+            try:
+                data["extracted_text"] = extracted_text
+            except Exception:
+                pass
+        out_path = os.path.join(dest_dir, f"report_{saved+1}.json")
         _save_json(data, out_path)
         saved += 1
         title = row.get("title") or data.get("title") or ""
@@ -134,7 +146,40 @@ def _download_from_crs_api(base_url: str, n: int, dest_dir: str) -> int:
             # if item is not a dict, wrap to be JSON-serializable dict
             if not isinstance(item, dict):
                 item = {"data": item}
-            out_path = os.path.join(dest_dir, f"report_{start_idx + saved}.json")
+
+            # Try to find an HTML URL in formats and extract text
+            html_url = ""
+            try:
+                formats = item.get("formats")
+                if isinstance(formats, list):
+                    for fmt in formats:
+                        if isinstance(fmt, dict) and (fmt.get("format") or "").upper() == "HTML":
+                            url = fmt.get("url") or ""
+                            if url:
+                                html_url = url
+                                break
+            except Exception:
+                pass
+
+            if html_url:
+                try:
+                    resp = requests.get(html_url, timeout=60)
+                    resp.raise_for_status()
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    for tag in soup.find_all(["table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption"]):
+                        try:
+                            tag.decompose()
+                        except Exception:
+                            pass
+                    text = soup.get_text(separator=" ", strip=True)
+                    extracted_text = " ".join(text.split()).strip()
+                    if extracted_text:
+                        item["extracted_text"] = extracted_text
+                except requests.exceptions.RequestException as e:
+                    print(f"[scraper] html-fetch-error: {e}")
+                except Exception as e:
+                    print(f"[scraper] html-parse-error: {e}")
+            out_path = os.path.join(dest_dir, f"report_{saved+1}.json")
             _save_json(item, out_path)
             saved += 1
             title = item.get("title") or ""

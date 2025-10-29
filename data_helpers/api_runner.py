@@ -92,11 +92,13 @@ def _call_gemini(prompt: str, max_output: int, api_key: str, model_name: str, ti
     )
     payload = {
         "contents": [{"parts": [{"text": str(prompt)}]}],
-        "generationConfig": {"maxOutputTokens": int(max_output)},
+        "generationConfig": {"maxOutputTokens": 4096 ,"temperature": 0.3,
+            "responseMimeType": "text/plain" },
     }
     headers = {"Content-Type": "application/json; charset=utf-8"}
     try:
         resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
+        print(f"resp is {resp.json()}")
         resp.raise_for_status()
         data = resp.json()
         return _extract_gemini_text(data)
@@ -129,88 +131,7 @@ def _call_deepseek(prompt: str, max_output: int, api_key: str, model_name: str =
         return "[parse-error] Non-JSON response from DeepSeek"
 
 
-def _call_openai(prompt: str, max_output: int, api_key: str, model_name: str, timeout: int = 60) -> str:
-    """Call OpenAI Chat Completions (ChatGPT)."""
-    url = "https://api.openai.com/v1/chat/completions"
-    payload = {
-        "model": model_name or DEFAULT_MODELS["chatgpt"],
-        "messages": [{"role": "user", "content": str(prompt)}],
-        "max_tokens": int(max_output),
-    }
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "Authorization": f"Bearer {api_key}",
-    }
-    try:
-        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        return _extract_deepseek_text(data)  # same shape as OpenAI
-    except requests.exceptions.RequestException as e:
-        return f"[network-error] {e}"
-    except ValueError:
-        return "[parse-error] Non-JSON response from OpenAI"
-
-
-def _call_claude(prompt: str, max_output: int, api_key: str, model_name: str, timeout: int = 60) -> str:
-    """Call Anthropic Claude Messages API."""
-    url = "https://api.anthropic.com/v1/messages"
-    payload = {
-        "model": model_name or DEFAULT_MODELS["claude"],
-        "max_tokens": int(max_output),
-        "messages": [{"role": "user", "content": str(prompt)}],
-    }
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-    try:
-        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        try:
-            content = data.get("content") or []
-            if content and isinstance(content, list):
-                part = content[0]
-                # text-type content
-                txt = part.get("text") if isinstance(part, dict) else None
-                if isinstance(txt, str):
-                    return txt
-        except Exception:
-            pass
-        return ""
-    except requests.exceptions.RequestException as e:
-        return f"[network-error] {e}"
-    except ValueError:
-        return "[parse-error] Non-JSON response from Claude"
-
-
-def _call_grok(prompt: str, max_output: int, api_key: str, model_name: str, timeout: int = 60) -> str:
-    """Call xAI Grok (OpenAI-compatible chat.completions shape)."""
-    url = "https://api.x.ai/v1/chat/completions"
-    payload = {
-        "model": model_name or DEFAULT_MODELS["grok"],
-        "messages": [{"role": "user", "content": str(prompt)}],
-        "max_tokens": int(max_output),
-    }
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "Authorization": f"Bearer {api_key}",
-    }
-    try:
-        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        return _extract_deepseek_text(data)
-    except requests.exceptions.RequestException as e:
-        return f"[network-error] {e}"
-    except ValueError:
-        return "[parse-error] Non-JSON response from Grok"
-
-
-def run_api(model: str, prompt: str, max_output: int = 512, keys_path: str | None = None, quiet: bool = True) -> str:
-    """Single entry point usable from imports or CLI."""
+def run_api(model: str, prompt: str, max_output: int = 1024, api_key: str = "") -> str:
     model = (model or "").strip().lower()
     keys = _load_keys(keys_path)
     # pick provider
@@ -248,6 +169,7 @@ def run_api(model: str, prompt: str, max_output: int = 512, keys_path: str | Non
                 "unsupported gemini model. choose one of: " + ", ".join(GEMINI_SUPPORTED)
             )
         out = _call_gemini(prompt, max_output, api_key, model)
+        print(f"out is {out}")
         elapsed = time.time() - start
         if not quiet:
             print(f"API: gemini | Elapsed: {elapsed:.2f}s")
@@ -298,8 +220,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Model id (e.g., gemini-2.5-pro, deepseek-chat, chatgpt, claude-sonnet-4-5, grok-2-latest)",
     )
     p.add_argument("--prompt", required=True, help="Prompt text to send to the model")
-    p.add_argument("--max_output", type=int, default=512, help="Maximum output tokens/length")
-    p.add_argument("--keys", default=KEY_FILE_DEFAULT, help="Path to api_keys.txt")
+    p.add_argument("--max_output", type=int, default=1024, help="Maximum output tokens/length")
+    p.add_argument("--api", required=True, help="API key string for the chosen provider")
     return p
 
 

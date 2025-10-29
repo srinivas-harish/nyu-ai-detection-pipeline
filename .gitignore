@@ -1,4 +1,4 @@
 data/
-.venv
 data_helpers/__pycache__
-data_helpers/api_keys.txt
+v3nv/
+.env 
