@@ -28,10 +28,12 @@ def _ensure_dir(path: str) -> None:
 
 def _list_json_files(json_dir: str) -> list:
     files = []
+    print(f"Listing JSON files in {json_dir}...")
     if not os.path.isdir(json_dir):
         return files
     for name in os.listdir(json_dir):
         if name.startswith("report_") and name.endswith(".json"):
+            print(f"files is {name}")
             files.append(os.path.join(json_dir, name))
     # Sort by report_<idx>.json
     def _index_key(p: str) -> int:
@@ -144,7 +146,7 @@ def _extract_fields(data: dict) -> tuple:
     # Text
     text_candidates = _find_all_strings(
         data,
-        {"text", "body", "content", "html", "summary", "document", "description"},
+        {"text", "body", "content", "html", "summary", "document", "description", "extracted_text"},
     )
     # Keep unique order
     seen = set()
@@ -179,9 +181,10 @@ def _save_csv_chunk(records: list, out_dir: str, chunk_index: int) -> str:
     return out_path
 
 
-def process_jsons(n: int, json_dir: str, out_dir: str) -> None:
+def process_jsons( json_dir: str, out_dir: str,n) -> None:
     """Process up to n JSON files into CSV chunks."""
     files = _list_json_files(json_dir)
+    
     if not files:
         print("[filter] No JSON files found to process.")
         return
@@ -220,6 +223,7 @@ def process_jsons(n: int, json_dir: str, out_dir: str) -> None:
         print(f"[filter] Saved {out_path} ({len(records)} rows)")
 
     print(f"[filter] Summary: processed={processed}, total_words={total_words}")
+    return out_path
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

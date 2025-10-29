@@ -55,11 +55,13 @@ def _call_gemini(prompt: str, max_output: int, api_key: str, model_name: str, ti
     )
     payload = {
         "contents": [{"parts": [{"text": str(prompt)}]}],
-        "generationConfig": {"maxOutputTokens": int(max_output)},
+        "generationConfig": {"maxOutputTokens": 4096 ,"temperature": 0.3,
+            "responseMimeType": "text/plain" },
     }
     headers = {"Content-Type": "application/json; charset=utf-8"}
     try:
         resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
+        print(f"resp is {resp.json()}")
         resp.raise_for_status()
         data = resp.json()
         return _extract_gemini_text(data)
@@ -92,8 +94,7 @@ def _call_deepseek(prompt: str, max_output: int, api_key: str, model_name: str =
         return "[parse-error] Non-JSON response from DeepSeek"
 
 
-def run_api(model: str, prompt: str, max_output: int = 512, api_key: str = "") -> str:
-    """One switch for both APIs."""
+def run_api(model: str, prompt: str, max_output: int = 1024, api_key: str = "") -> str:
     model = (model or "").strip().lower()
     api_key = (api_key or "").strip()
     if not api_key:
@@ -105,6 +106,7 @@ def run_api(model: str, prompt: str, max_output: int = 512, api_key: str = "") -
                 "unsupported gemini model. choose one of: " + ", ".join(GEMINI_SUPPORTED)
             )
         out = _call_gemini(prompt, max_output, api_key, model)
+        print(f"out is {out}")
         elapsed = time.time() - start
         print(f"API: gemini | Elapsed: {elapsed:.2f}s")
         print("Output:\n" + (out or ""))
@@ -129,7 +131,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Model id (e.g., gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-flash-image, gemini-2.0-flash, gemini-2.0-flash-lite, deepseek-chat)",
     )
     p.add_argument("--prompt", required=True, help="Prompt text to send to the model")
-    p.add_argument("--max_output", type=int, default=512, help="Maximum output tokens/length")
+    p.add_argument("--max_output", type=int, default=1024, help="Maximum output tokens/length")
     p.add_argument("--api", required=True, help="API key string for the chosen provider")
     return p
 
