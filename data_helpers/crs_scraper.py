@@ -56,6 +56,7 @@ def _download_from_everycrsreport(n: int, dest_dir: str, csv_url: str = "https:/
     reader = csv.DictReader(lines)
     base = "https://www.everycrsreport.com/"
     saved = 0
+    start_idx = _next_start_index(dest_dir)
 
     for i, row in enumerate(reader, start=1):
         if saved >= n:
@@ -119,6 +120,7 @@ def _extract_list_from_listing(payload: dict) -> list:
 def _download_from_crs_api(base_url: str, n: int, dest_dir: str) -> int:
     """Paged fetch + save n items."""
     saved = 0
+    start_idx = _next_start_index(dest_dir)
     page = 1
     print(f"[scraper] Using CRS API: {base_url}")
     while saved < n:
