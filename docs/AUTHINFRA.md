@@ -6,12 +6,12 @@ Minimal scaffold for AI text detection infrastructure. Empirical and reversible.
 
 - **Package `authinfra/`** with subpackages:
   - `datasets` — placeholder
-  - `generation` — placeholder
+  - `generation` — prompt registry (IDs, versioning), chunking (min/max tokens, overlap), provider-agnostic adapters (dry-run + stubs), job runner writing JSONL with errors per line
   - `detectors` — **baseline detector** (Hello-SimpleAI/chatgpt-detector-roberta); download + inference wrapper, strict JSON output
   - `inference` — placeholder
   - `training` — stub only (no training logic)
   - `utils` — structured JSON logging and config loader (env + optional JSON config file)
-- **CLI**: `python -m authinfra` prints available commands. Implemented: `config`, `version`, `detector-download`, `detector-infer`.
+- **CLI**: `python -m authinfra` prints available commands. Implemented: `config`, `version`, `detector-download`, `detector-infer`, `generate`.
 - **Config**: `load_config()` from env (`AUTHINFRA_*`) and optional file (`AUTHINFRA_CONFIG` or path argument).
 - **Logging**: `configure_logging()`, `get_logger()`; JSON logs by default.
 - **Layout**: `services/api` and `services/worker` placeholders; `docs/` and `artifacts/` for future use.
@@ -31,6 +31,15 @@ Minimal scaffold for AI text detection infrastructure. Empirical and reversible.
 - No fine-tuning of the baseline.
 - No other detector implementation or dataset loading in authinfra.
 - No inference pipeline beyond the single-file baseline.
+- No real API wiring for generation adapters (OpenAI, Anthropic, Gemini are stubs).
+
+## Generation pipeline
+
+- Prompt registry: `get_prompt(id)`, `list_prompt_ids()`, version `v1`.
+- Chunking: `chunk_text(text, min_tokens, max_tokens, overlap_tokens)` — deterministic.
+- Adapters: `BaseAdapter`, `DryRunAdapter` (no API), stubs for OpenAI, Anthropic, Gemini. `get_adapter(name)`.
+- Runner: `run_generation(input_text, prompt_id, model_name, output_path, dry_run=True, ...)` → writes JSONL; returns (lines_written, error_count).
+- JSONL schema: each line has `job_id`, `timestamp_utc`, `chunk_index`, `prompt_id`, `prompt_version`, `prompt_text`, `model_id`, `input_token_count`, `output_text`, `output_token_count`, `runtime_sec`, `error`, `dry_run`. Errors are explicit per line.
 
 ## Running the CLI
 
@@ -42,6 +51,7 @@ python -m authinfra version
 python -m authinfra config
 python -m authinfra detector-download
 python -m authinfra detector-infer --input path/to/file.txt
+python -m authinfra generate --input path/to/text.txt --output path/to/out.jsonl
 ```
 
 Disable JSON logs: `AUTHINFRA_JSON_LOGS=false python -m authinfra version`

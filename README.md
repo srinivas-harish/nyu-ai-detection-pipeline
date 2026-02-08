@@ -31,7 +31,7 @@ A pretrained AI-text detector is wired as a **baseline** for comparison. It is a
    `python -m authinfra detector-download`
 3. Run inference on a text file:  
    `python -m authinfra detector-infer --input path/to/file.txt`  
-   Output is JSON to stdout: `model`, `runtime_sec`, `probability` (0–1), `error` (if any), `input_truncated`.
+   Output is JSON to stdout: `model`, `runtime_sec`, `probability` (0–1 when present, or null on error), `error` (if any), `input_truncated`.
 
 **What this baseline does NOT guarantee**
 
@@ -39,6 +39,34 @@ A pretrained AI-text detector is wired as a **baseline** for comparison. It is a
 - It may be wrong; treat it as a black box for comparison only.
 - It is not fine-tuned or trained in this repo; it can be swapped out later.
 
+### Generation pipeline (AuthInfra)
+
+The generation system produces AI-equivalent text from human text for data creation. It is explicit, inspectable, and controllable. Partial failure is normal; errors are captured per line in the output.
+
+- **Prompt registry**: prompt IDs 1–10, versioned (`v1`). See `authinfra.generation.prompts`.
+- **Chunking**: min/max tokens, overlap; deterministic (same input → same chunks). Uses tiktoken if available, else whitespace.
+- **Adapters**: provider-agnostic base; dry-run adapter (no API); stubs for OpenAI, Anthropic, Gemini (not wired to APIs).
+- **Output**: JSONL, one line per chunk. Fields: `job_id`, `timestamp_utc`, `chunk_index`, `prompt_id`, `prompt_version`, `prompt_text`, `model_id`, `input_token_count`, `output_text`, `output_token_count`, `runtime_sec`, `error`, `dry_run`.
+
+**How to run**
+
+- Dry-run (default; no API calls, placeholders only):  
+  `python -m authinfra generate --input path/to/text.txt --output path/to/out.jsonl`
+- With prompt and chunk params:  
+  `python -m authinfra generate --input in.txt --output out.jsonl --prompt-id 2 --model dry-run --min-tokens 300 --max-tokens 1000 --overlap 32`
+- Real API calls (when adapters are wired): add `--no-dry-run` and `--model openai` (or other). Currently non–dry-run adapters are stubs and return an error in each line.
+
+**Dry-run vs real calls**
+
+- **Dry-run** (default): No external API is called. Each line gets a placeholder `output_text` and `dry_run: true`. Use to validate the pipeline, chunking, and schema.
+- **Real calls**: Set `--no-dry-run`. Requires an adapter that is actually connected to a provider; today those adapters are stubs and will write `error` on each line.
+
+**What this does NOT validate**
+
+- It does not check that prompts produce good or consistent output.
+- It does not check that model output is faithful to the source.
+- It does not evaluate detector quality or realism of generated text.
+- Provider adapters (OpenAI, Anthropic, Gemini) are stubs until wired to APIs.
 
 **Quick Setup**
 
