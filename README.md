@@ -7,8 +7,14 @@ Structure:
 - `data_helpers/` – helper scripts (API runner, CRS scraper, filter/cleaner, conversions)
 - `data/` – raw and processed datasets
 - `notebooks/` – experiments and analysis
+- `authinfra/` – **AuthInfra** core library (scaffold: datasets, generation, detectors, inference, training stub, utils; CLI, logging, config)
+- `services/` – API and worker placeholders
+- `docs/` – documentation (see `docs/AUTHINFRA.md` for AuthInfra)
+- `artifacts/` – data artifacts output
 
 Pipeline: scrape → filter → convert (loop + overlap) → train
+
+**AuthInfra** is a local scaffold for detection infrastructure. It does **not** include training loops, model code, or external API integration. See `docs/AUTHINFRA.md` for what exists and what does not. Run: `python -m authinfra`
 
 
 **Quick Setup**

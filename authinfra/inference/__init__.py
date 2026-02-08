@@ -1,0 +1,1 @@
+"""Inference pipeline. Stub only."""
