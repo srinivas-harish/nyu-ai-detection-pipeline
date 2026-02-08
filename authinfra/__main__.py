@@ -18,6 +18,8 @@ COMMANDS = {
     "detector-download": "Download the baseline HF detector model (Hello-SimpleAI/chatgpt-detector-roberta).",
     "detector-infer": "Run baseline detector on a local text file; print JSON result to stdout.",
     "generate": "Run generation job: chunk text, apply prompt + model, write JSONL. Dry-run by default.",
+    "dataset-compile": "Compile dataset from generation JSONL(s); write manifest, train.jsonl, valid.jsonl.",
+    "dataset-summary": "Print dataset summary counts (train_count, valid_count, total) from a compiled folder.",
 }
 
 
@@ -96,6 +98,9 @@ def _parse_argv(args: list[str]) -> dict:
         elif a == "--no-dry-run":
             out["no_dry_run"] = "true"
             i += 1
+        elif a == "--inputs" and i + 1 < len(args):
+            out["inputs"] = args[i + 1]
+            i += 2
         elif a.startswith("--") and i + 1 < len(args) and not args[i + 1].startswith("--"):
             out[a[2:].replace("-", "_")] = args[i + 1]
             i += 2
@@ -146,6 +151,60 @@ def _cmd_generate(argv: list[str]) -> int:
     return 0 if err_count == 0 else 1
 
 
+def _cmd_dataset_compile(argv: list[str]) -> int:
+    """Compile dataset. --name NAME --output-dir DIR --inputs PATH [PATH ...] [--models id1,id2] [--prompts id1,id2] [--split-ratio 0.9] [--split-seed 0]."""
+    args = argv[1:]
+    parsed = _parse_argv(args)
+    name = parsed.get("name", "dataset")
+    output_dir = parsed.get("output_dir")
+    inputs_raw = parsed.get("inputs", "")
+    model_ids = parsed.get("models", "").strip().split(",") if parsed.get("models") else None
+    prompt_ids = [p.strip() for p in parsed.get("prompts", "").split(",") if p.strip()] if parsed.get("prompts") else None
+    split_ratio = float(parsed.get("split_ratio", "0.9"))
+    split_seed = int(parsed.get("split_seed", "0"))
+
+    if not output_dir:
+        print(json.dumps({"error": "missing --output-dir"}))
+        return 1
+    input_paths = [p.strip() for p in inputs_raw.split() if p.strip()]
+    if not input_paths and parsed.get("input"):
+        input_paths = [parsed["input"]]
+    if not input_paths:
+        print(json.dumps({"error": "missing --inputs (space-separated paths or --inputs path1 path2)"}))
+        return 1
+
+    from authinfra.datasets.compiler import compile_dataset
+    manifest = compile_dataset(
+        input_paths,
+        output_dir,
+        dataset_name=name,
+        model_ids=model_ids,
+        prompt_ids=prompt_ids or None,
+        split_ratio=split_ratio,
+        split_seed=split_seed,
+    )
+    print(json.dumps({"manifest": str(Path(output_dir) / "manifest.json"), "train_count": manifest["train_count"], "valid_count": manifest["valid_count"], "filter_log": manifest["filter_log"]}))
+    return 0
+
+
+def _cmd_dataset_summary(argv: list[str]) -> int:
+    """Print dataset summary (counts only). --dataset-dir PATH."""
+    args = argv[1:]
+    parsed = _parse_argv(args)
+    dataset_dir = parsed.get("dataset_dir")
+
+    if not dataset_dir:
+        print(json.dumps({"error": "missing --dataset-dir"}))
+        return 1
+    from authinfra.datasets.compiler import dataset_summary_counts
+    counts = dataset_summary_counts(dataset_dir)
+    if counts is None:
+        print(json.dumps({"error": "no manifest.json in dataset dir"}))
+        return 1
+    print(json.dumps(counts))
+    return 0
+
+
 def main() -> int:
     cfg = load_config()
     log_level = cfg.get("log_level", "INFO").upper()
@@ -177,6 +236,10 @@ def main() -> int:
         return _cmd_detector_infer(argv)
     if cmd == "generate":
         return _cmd_generate(argv)
+    if cmd == "dataset-compile":
+        return _cmd_dataset_compile(argv)
+    if cmd == "dataset-summary":
+        return _cmd_dataset_summary(argv)
     return 0
 
 

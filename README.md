@@ -54,7 +54,7 @@ The generation system produces AI-equivalent text from human text for data creat
   `python -m authinfra generate --input path/to/text.txt --output path/to/out.jsonl`
 - With prompt and chunk params:  
   `python -m authinfra generate --input in.txt --output out.jsonl --prompt-id 2 --model dry-run --min-tokens 300 --max-tokens 1000 --overlap 32`
-- Real API calls (when adapters are wired): add `--no-dry-run` and `--model openai` (or other). Currently non–dry-run adapters are stubs and return an error in each line.
+- Real API calls (when adapters are wired): add `--no-dry-run` and `--model openai` (or other). The generation pipeline does **not** read `data_helpers/api_keys.txt`; wiring an adapter to a provider (and keys) is separate. Currently non–dry-run adapters are stubs and return an error in each line.
 
 **Dry-run vs real calls**
 
@@ -67,6 +67,38 @@ The generation system produces AI-equivalent text from human text for data creat
 - It does not check that model output is faithful to the source.
 - It does not evaluate detector quality or realism of generated text.
 - Provider adapters (OpenAI, Anthropic, Gemini) are stubs until wired to APIs.
+
+### Dataset compiler (AuthInfra)
+
+The dataset compiler turns **generation JSONL artifacts** into a **folder dataset** with a manifest and train/valid splits. It is plumbing only; it does not evaluate quality or usefulness.
+
+**What a “dataset” means here**
+
+- A **dataset** is a directory containing:
+  - `manifest.json` — schema version, source paths, selected model_ids and prompt_ids, filter_log (every exclusion reason and count), train/valid counts and paths, split_ratio, split_seed.
+  - `train.jsonl` — selected generation lines (same schema as generation output) assigned to train.
+  - `valid.jsonl` — same, assigned to valid.
+- Each line in train/valid is one generation record (human chunk + model output + metadata). Raw data is preserved; no field is dropped from the generation schema.
+
+**What assumptions are NOT made**
+
+- No claim that the compiled dataset is balanced, fair, or suitable for training.
+- No sampling heuristics that assume correctness or quality.
+- No deletion or modification of raw artifacts; compilation only reads and writes to the output folder.
+- Selection is explicit: you specify which model_ids and prompt_ids to include; everything else is excluded and logged.
+
+**Reproducibility**
+
+- Same source paths + same `--models`, `--prompts`, `--split-ratio`, and `--split-seed` produce the same manifest and the same train/valid split. The split is deterministic given the seed.
+- `manifest.json` records all of these so you can reproduce the dataset from the manifest metadata.
+
+**How to run**
+
+- Compile:  
+  `python -m authinfra dataset-compile --name my_dataset --output-dir artifacts/datasets/my_dataset --inputs "path/to/gen1.jsonl path/to/gen2.jsonl" --models dry-run --prompts 1,3`
+- Omit `--models` / `--prompts` to include all models / all prompts from the sources.
+- Summary (counts only):  
+  `python -m authinfra dataset-summary --dataset-dir artifacts/datasets/my_dataset`
 
 **Quick Setup**
 

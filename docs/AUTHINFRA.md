@@ -5,13 +5,13 @@ Minimal scaffold for AI text detection infrastructure. Empirical and reversible.
 ## What exists
 
 - **Package `authinfra/`** with subpackages:
-  - `datasets` — placeholder
+  - `datasets` — compiler: generation JSONL(s) → folder with manifest.json, train.jsonl, valid.jsonl; explicit model/prompt selection; filter_log; reproducible split
   - `generation` — prompt registry (IDs, versioning), chunking (min/max tokens, overlap), provider-agnostic adapters (dry-run + stubs), job runner writing JSONL with errors per line
   - `detectors` — **baseline detector** (Hello-SimpleAI/chatgpt-detector-roberta); download + inference wrapper, strict JSON output
   - `inference` — placeholder
   - `training` — stub only (no training logic)
   - `utils` — structured JSON logging and config loader (env + optional JSON config file)
-- **CLI**: `python -m authinfra` prints available commands. Implemented: `config`, `version`, `detector-download`, `detector-infer`, `generate`.
+- **CLI**: `python -m authinfra` prints available commands. Implemented: `config`, `version`, `detector-download`, `detector-infer`, `generate`, `dataset-compile`, `dataset-summary`.
 - **Config**: `load_config()` from env (`AUTHINFRA_*`) and optional file (`AUTHINFRA_CONFIG` or path argument).
 - **Logging**: `configure_logging()`, `get_logger()`; JSON logs by default.
 - **Layout**: `services/api` and `services/worker` placeholders; `docs/` and `artifacts/` for future use.
@@ -41,6 +41,14 @@ Minimal scaffold for AI text detection infrastructure. Empirical and reversible.
 - Runner: `run_generation(input_text, prompt_id, model_name, output_path, dry_run=True, ...)` → writes JSONL; returns (lines_written, error_count).
 - JSONL schema: each line has `job_id`, `timestamp_utc`, `chunk_index`, `prompt_id`, `prompt_version`, `prompt_text`, `model_id`, `input_token_count`, `output_text`, `output_token_count`, `runtime_sec`, `error`, `dry_run`. Errors are explicit per line.
 
+## Dataset compiler
+
+- Consumes one or more generation JSONL files; selects by `model_ids` and `prompt_ids` (explicit lists).
+- Excludes lines with `error` set or missing `output_text`; all exclusions recorded in `filter_log` (reason + count).
+- Output folder: `manifest.json` (schema_version v1, source_paths, model_ids, prompt_ids, filter_log, train_count, valid_count, split_ratio, split_seed), `train.jsonl`, `valid.jsonl`.
+- Split is deterministic (split_seed). No examples silently dropped. Raw generation schema preserved in train/valid lines.
+- `compile_dataset(...)`, `load_manifest(...)`, `dataset_summary_counts(...)`.
+
 ## Running the CLI
 
 From repo root:
@@ -52,6 +60,8 @@ python -m authinfra config
 python -m authinfra detector-download
 python -m authinfra detector-infer --input path/to/file.txt
 python -m authinfra generate --input path/to/text.txt --output path/to/out.jsonl
+python -m authinfra dataset-compile --name my_dataset --output-dir artifacts/datasets/my_dataset --inputs "gen1.jsonl gen2.jsonl" --models dry-run --prompts 1,3
+python -m authinfra dataset-summary --dataset-dir artifacts/datasets/my_dataset
 ```
 
 Disable JSON logs: `AUTHINFRA_JSON_LOGS=false python -m authinfra version`
