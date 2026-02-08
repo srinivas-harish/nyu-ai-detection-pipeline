@@ -14,7 +14,30 @@ Structure:
 
 Pipeline: scrape → filter → convert (loop + overlap) → train
 
-**AuthInfra** is a local scaffold for detection infrastructure. It does **not** include training loops, model code, or external API integration. See `docs/AUTHINFRA.md` for what exists and what does not. Run: `python -m authinfra`
+**AuthInfra** is a local scaffold for detection infrastructure. It includes a **baseline detector** (see below); it does **not** include training loops or fine-tuning. See `docs/AUTHINFRA.md` for what exists and what does not. Run: `python -m authinfra`
+
+### Baseline detector (AuthInfra)
+
+A pretrained AI-text detector is wired as a **baseline** for comparison. It is a dependency, not a claim of quality.
+
+- **Model**: [Hello-SimpleAI/chatgpt-detector-roberta](https://huggingface.co/Hello-SimpleAI/chatgpt-detector-roberta) (Hugging Face).
+- **Dataset (citation)**: [Hello-SimpleAI/HC3](https://huggingface.co/datasets/Hello-SimpleAI/HC3) (Human ChatGPT Comparison Corpus).
+
+**How to run**
+
+1. Install deps (includes `transformers` and `torch`):  
+   `pip install -r requirements.txt`
+2. Download the model (first time):  
+   `python -m authinfra detector-download`
+3. Run inference on a text file:  
+   `python -m authinfra detector-infer --input path/to/file.txt`  
+   Output is JSON to stdout: `model`, `runtime_sec`, `probability` (0–1), `error` (if any), `input_truncated`.
+
+**What this baseline does NOT guarantee**
+
+- It is not tuned for CRS or other domain-specific text.
+- It may be wrong; treat it as a black box for comparison only.
+- It is not fine-tuned or trained in this repo; it can be swapped out later.
 
 
 **Quick Setup**

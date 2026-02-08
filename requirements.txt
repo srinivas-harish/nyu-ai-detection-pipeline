@@ -1,3 +1,7 @@
 requests>=2.32.0
 beautifulsoup4>=4.12.3
 pandas>=2.2.0
+
+# AuthInfra baseline detector (optional for data_helpers; required for detector-infer)
+transformers>=4.30.0
+torch>=2.0.0
