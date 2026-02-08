@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0d0d0e;
+  --surface: #1a1a1b;
+  --border: #2d2d2e;
+  --text: #e6e6e7;
+  --muted: #71767b;
+}
+
+body {
+  @apply bg-[var(--bg)] text-[var(--text)] antialiased;
+}

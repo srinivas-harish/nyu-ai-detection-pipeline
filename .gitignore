@@ -2,3 +2,7 @@ data/
 .venv
 data_helpers/__pycache__
 data_helpers/api_keys.txt
+
+agent_instructions/
+apps/web/node_modules/
+apps/web/.next/

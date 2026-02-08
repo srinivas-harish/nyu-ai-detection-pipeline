@@ -8,6 +8,7 @@ Structure:
 - `data/` – raw and processed datasets
 - `notebooks/` – experiments and analysis
 - `authinfra/` – **AuthInfra** core library (scaffold: datasets, generation, detectors, inference, training stub, utils; CLI, logging, config)
+- `apps/web/` – **Web UI** (Next.js) operator console for generation, datasets, inference
 - `services/` – API and worker placeholders
 - `docs/` – documentation (see `docs/AUTHINFRA.md` for AuthInfra)
 - `artifacts/` – data artifacts output
@@ -78,7 +79,7 @@ The dataset compiler turns **generation JSONL artifacts** into a **folder datase
   - `manifest.json` — schema version, source paths, selected model_ids and prompt_ids, filter_log (every exclusion reason and count), train/valid counts and paths, split_ratio, split_seed.
   - `train.jsonl` — selected generation lines (same schema as generation output) assigned to train.
   - `valid.jsonl` — same, assigned to valid.
-- Each line in train/valid is one generation record (human chunk + model output + metadata). Raw data is preserved; no field is dropped from the generation schema.
+- Each line in train/valid is one generation record: **model output and metadata** (same schema as generation JSONL). The **human (input) chunk text** is not stored in the record; only the model’s output and fields like job_id, chunk_index, prompt_id, model_id are. Raw generation schema is preserved; no field is dropped.
 
 **What assumptions are NOT made**
 
@@ -99,6 +100,26 @@ The dataset compiler turns **generation JSONL artifacts** into a **folder datase
 - Omit `--models` / `--prompts` to include all models / all prompts from the sources.
 - Summary (counts only):  
   `python -m authinfra dataset-summary --dataset-dir artifacts/datasets/my_dataset`
+
+### Web UI (AuthInfra)
+
+Operator console under `apps/web/` (Next.js). Dark-mode default; restrained layout. Exposes system state and uncertainty; no fake progress or synthetic metrics.
+
+**What the UI can do**
+
+- **Generate**: Page to select prompt (ID + version), model, and (when wired) input texts; start a run. Prompt editing is explicit and versioned; generation status is shown as reported by the backend (no synthetic progress).
+- **Datasets**: Page to list compiled datasets and view manifest (filter log, counts). When backend is wired, list and manifest load from API.
+- **Inference**: Page to paste/upload text and run the baseline detector. Results show **probability** (0–1) and runtime, not binary judgments. Input-truncation and errors are shown.
+
+**What it cannot do yet**
+
+- Backend is **not** wired: no API server is started by the app. Generate, Datasets, and Inference currently show stub messages (e.g. "Backend not wired"). To wire: set `NEXT_PUBLIC_API_BASE` and implement corresponding API routes (or a separate service) that call the authinfra CLI or Python APIs.
+- No file upload for generation inputs; no live generation job status polling; no sentence-level inference (whole-text only in schema; sentence-level is TODO).
+- No authentication or multi-user support.
+
+**Run the app**
+
+- `cd apps/web && npm install && npm run dev` — serves at http://localhost:3000. Use for local UI only; backend must be implemented separately.
 
 **Quick Setup**
 
