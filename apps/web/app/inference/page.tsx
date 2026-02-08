@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 
-// TODO: Wire to backend. Inference API not yet implemented; result is stubbed.
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
 type InferenceResult = {
@@ -17,21 +16,43 @@ export default function InferencePage() {
   const [text, setText] = useState("");
   const [result, setResult] = useState<InferenceResult | null>(null);
   const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const runInference = async () => {
     setResult(null);
+    setError(null);
     setRunning(true);
     try {
-      // TODO: POST to /api/inference with { text }. Backend calls authinfra detector-infer or equivalent.
-      // Must return { model, runtime_sec, probability, error, input_truncated }. No judgments — probability only.
-      await new Promise((r) => setTimeout(r, 500));
-      setResult({
-        model: "Hello-SimpleAI/chatgpt-detector-roberta",
-        runtime_sec: null,
-        probability: null,
-        error: "Backend not wired. Set NEXT_PUBLIC_API_BASE and implement /api/inference.",
-        input_truncated: false,
+      if (!API_BASE) {
+        setResult({
+          model: "Hello-SimpleAI/chatgpt-detector-roberta",
+          runtime_sec: null,
+          probability: null,
+          error: "Set NEXT_PUBLIC_API_BASE to run the baseline detector.",
+          input_truncated: false,
+        });
+        return;
+      }
+      const res = await fetch(`${API_BASE}/inference`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.trim() }),
       });
+      const data = (await res.json()) as InferenceResult;
+      if (!res.ok) {
+        const detail = (data as { detail?: string | string[] }).detail;
+        setError(
+          detail != null
+            ? Array.isArray(detail)
+              ? detail.join(" ")
+              : String(detail)
+            : res.statusText
+        );
+        return;
+      }
+      setResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
     }
@@ -63,6 +84,10 @@ export default function InferencePage() {
           {running ? "Running…" : "Run baseline detector"}
         </button>
       </section>
+
+      {error && (
+        <p className="text-sm text-red-400" role="alert">{error}</p>
+      )}
 
       {result && (
         <section className="space-y-3">

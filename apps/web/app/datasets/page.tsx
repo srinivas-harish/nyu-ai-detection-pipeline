@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 
-// TODO: Wire to backend. Datasets API not yet implemented; list/manifest are stubbed.
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
 type FilterLogEntry = { reason: string; count: number };
@@ -24,16 +23,46 @@ export default function DatasetsPage() {
   const [datasets, setDatasets] = useState<string[]>([]);
   const [selectedManifest, setSelectedManifest] = useState<Manifest | null>(null);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
 
   useEffect(() => {
-    // TODO: GET /api/datasets → list of dataset names or paths. Backend not wired.
-    setDatasets([]);
-    setLoading(false);
+    if (!API_BASE) {
+      setDatasets([]);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/datasets`);
+        if (!res.ok) throw new Error(res.statusText);
+        const data = (await res.json()) as { datasets: string[] };
+        if (!cancelled) setDatasets(data.datasets || []);
+      } catch (e) {
+        if (!cancelled) {
+          setListError(e instanceof Error ? e.message : String(e));
+          setDatasets([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const loadManifest = async (name: string) => {
-    // TODO: GET /api/datasets/:name/manifest → manifest.json. Backend not wired.
-    setSelectedManifest(null);
+    if (!API_BASE) {
+      setSelectedManifest(null);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/datasets/${encodeURIComponent(name)}/manifest`);
+      if (!res.ok) throw new Error(res.statusText);
+      const data = (await res.json()) as Manifest;
+      setSelectedManifest(data);
+    } catch {
+      setSelectedManifest(null);
+    }
   };
 
   return (
@@ -50,10 +79,15 @@ export default function DatasetsPage() {
         </h2>
         {loading ? (
           <p className="text-sm text-[var(--muted)]">Loading…</p>
+        ) : !API_BASE ? (
+          <p className="text-sm text-[var(--muted)]">
+            Set NEXT_PUBLIC_API_BASE to list datasets from the API.
+          </p>
+        ) : listError ? (
+          <p className="text-sm text-red-400">{listError}</p>
         ) : datasets.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">
-            No datasets listed. Backend not wired — TODO: serve list from
-            artifacts/datasets or API.
+            No datasets listed. Compile via API or CLI (artifacts/datasets).
           </p>
         ) : (
           <ul className="list-disc list-inside text-sm text-[var(--text)]">
@@ -91,8 +125,9 @@ export default function DatasetsPage() {
       )}
 
       <p className="text-xs text-[var(--muted)]">
-        To test with real data, run the dataset compiler CLI and point the
-        backend (when implemented) at the output folder.
+        To compile a dataset, use the API POST /datasets/compile or the CLI
+        (python -m authinfra dataset-compile). List is read from
+        artifacts/datasets.
       </p>
     </div>
   );

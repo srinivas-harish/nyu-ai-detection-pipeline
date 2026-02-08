@@ -9,7 +9,7 @@ Structure:
 - `notebooks/` – experiments and analysis
 - `authinfra/` – **AuthInfra** core library (scaffold: datasets, generation, detectors, inference, training stub, utils; CLI, logging, config)
 - `apps/web/` – **Web UI** (Next.js) operator console for generation, datasets, inference
-- `services/` – API and worker placeholders
+- `services/` – API (FastAPI) and worker (job runner) for generation, datasets, inference
 - `docs/` – documentation (see `docs/AUTHINFRA.md` for AuthInfra)
 - `artifacts/` – data artifacts output
 
@@ -109,17 +109,49 @@ Operator console under `apps/web/` (Next.js). Dark-mode default; restrained layo
 
 - **Generate**: Page to select prompt (ID + version), model, and (when wired) input texts; start a run. Prompt editing is explicit and versioned; generation status is shown as reported by the backend (no synthetic progress).
 - **Datasets**: Page to list compiled datasets and view manifest (filter log, counts). When backend is wired, list and manifest load from API.
-- **Inference**: Page to paste/upload text and run the baseline detector. Results show **probability** (0–1) and runtime, not binary judgments. Input-truncation and errors are shown.
+- **Inference**: Page to paste text (no file upload in UI) and run the baseline detector. Results show **probability** (0–1) and runtime, not binary judgments. Input-truncation and errors are shown.
 
 **What it cannot do yet**
 
-- Backend is **not** wired: no API server is started by the app. Generate, Datasets, and Inference currently show stub messages (e.g. "Backend not wired"). To wire: set `NEXT_PUBLIC_API_BASE` and implement corresponding API routes (or a separate service) that call the authinfra CLI or Python APIs.
-- No file upload for generation inputs; no live generation job status polling; no sentence-level inference (whole-text only in schema; sentence-level is TODO).
-- No authentication or multi-user support.
+- No file upload for generation inputs (paste only). No sentence-level inference (whole-text only; sentence-level is TODO). No authentication or multi-user support.
 
 **Run the app**
 
-- `cd apps/web && npm install && npm run dev` — serves at http://localhost:3000. Use for local UI only; backend must be implemented separately.
+- `cd apps/web && npm install && npm run dev` — serves at http://localhost:3000. To use real backend: run the API and worker (see **API and worker (local)** below) and set `NEXT_PUBLIC_API_BASE=http://localhost:8000` (or your API URL) before `npm run dev`.
+
+### API and worker (local)
+
+A minimal FastAPI service and a filesystem-based worker wire the Web UI to AuthInfra. All runs are local and reversible (artifacts on disk; no external queue).
+
+**How to run API + worker locally**
+
+1. From **repo root**, install deps and run the API in one terminal:
+   ```bash
+   pip install -r requirements.txt
+   uvicorn services.api.main:app --host 0.0.0.0 --port 8000
+   ```
+2. In a **second** terminal (repo root), run the worker so generation and compile jobs are executed:
+   ```bash
+   python -m services.worker
+   ```
+3. Run the Web UI and point it at the API:
+   ```bash
+   cd apps/web && NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
+   ```
+   Open http://localhost:3000. Generate (paste input text), Datasets (list + manifest), and Inference (paste text, run detector) will call the API.
+
+**What is synchronous vs async**
+
+- **Synchronous**: **Inference** — `POST /inference` runs the baseline detector in the API process and returns the result. No worker involved.
+- **Asynchronous (worker)**: **Generation** and **dataset compile** — API enqueues a job (writes to `artifacts/jobs/<job_id>.json`) and returns `job_id`. The worker polls the job dir, picks pending jobs, runs authinfra (generation or compile), and updates the job file. The UI polls `GET /jobs/<job_id>` until status is `completed` or `failed`.
+
+**Known failure points**
+
+- **Job dir missing or not writable**: API health check (`GET /health`) and job creation will fail. Ensure `artifacts/jobs` exists or set `AUTHINFRA_JOBS_DIR` to a writable path.
+- **Worker not running**: Generation and compile jobs stay `pending` forever. Start the worker in a separate terminal.
+- **Inference (detector)**: First run downloads the Hugging Face model; network or disk errors surface as 500 and in the response `error` field. Empty input returns 400.
+- **Generation/compile paths**: Compile jobs require `input_paths` to existing generation JSONL files (e.g. under `artifacts/generation/`). If paths are wrong, the worker marks the job `failed` with an error.
+- **CORS**: API allows all origins for local use only.
 
 **Quick Setup**
 
