@@ -1,7 +1,16 @@
 data/
 .venv
+.venv_r7
+__pycache__/
 data_helpers/__pycache__
 data_helpers/api_keys.txt
+data_helpers/jsons/
+api_keys.md
+train_examples.jsonl
+
+artifacts/datasets/
+artifacts/jobs/
+artifacts/*.jsonl
 
 agent_instructions/
 apps/web/node_modules/
