@@ -22,7 +22,7 @@ Open http://localhost:3000. To use the detector or run generation jobs you need 
 | `data_helpers/` | Scripts: CRS scraper, filter, conversions, API runner. |
 | `data/` | Raw and processed input. |
 | `artifacts/` | Generation JSONL, compiled datasets, job state. |
-| `docs/` | [AUTHINFRA.md](docs/AUTHINFRA.md), [LIMITATIONS_AND_STABILITY.md](docs/LIMITATIONS_AND_STABILITY.md). |
+| `docs/` | Extra docs (if present). |
 
 Stack: Python (authinfra), Next.js 14, FastAPI, Hugging Face (detector), Google Generative AI (Gemini). Generation is dry-run by default. Gemini reads `GEMINI_API_KEY` from `api_keys.md` at repo root (or `AUTHINFRA_API_KEYS_PATH`); we don’t log or send keys. For real Gemini you need `pip install -r requirements.txt` (includes `google-generativeai`).
 
@@ -173,4 +173,4 @@ Outputs often go to `data_helpers/jsons`, `./clean_data`, `./gen_out` unless you
 
 ## Out of scope
 
-No training or fine-tuning in this repo. No accuracy or production guarantees for the detector, generation, or datasets. Details: [docs/LIMITATIONS_AND_STABILITY.md](docs/LIMITATIONS_AND_STABILITY.md).
+No training or fine-tuning in this repo. No accuracy or production guarantees for the detector, generation, or datasets.
