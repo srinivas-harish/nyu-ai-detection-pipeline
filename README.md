@@ -1,6 +1,6 @@
 # nyu-ai-detection-pipeline
 
-Research pipeline for domain-specific AI-text detection (NYU AI in Education / VIP). We scrape, filter, convert; training is planned later. This repo has the baseline detector, a generation pipeline, dataset compilation, and a small operator UI. No training or fine-tuning lives here yet.
+Domain-specific AI-text detection pipeline (NYU AI in Education / VIP). Scrape, filter, convert. Baseline detector, generation pipeline, dataset compiler, operator UI.
 
 **Run the UI:**
 
@@ -16,7 +16,7 @@ Open http://localhost:3000. To use the detector or run generation jobs you need 
 
 | Path | What it is |
 |------|-------------|
-| `authinfra/` | Core lib: datasets, generation, detectors, inference (CLI + Python). Training is stubbed. |
+| `authinfra/` | Core lib: datasets, generation, detectors, inference (CLI + Python). |
 | `apps/web/` | Next.js UI: Generate, Datasets, Inference (dark theme). |
 | `services/` | FastAPI API + one worker for generation/compile. Local only. |
 | `data_helpers/` | Scripts: CRS scraper, filter, conversions, API runner. |
@@ -53,7 +53,7 @@ UI without backend: `cd apps/web && npm run dev` — it’ll ask for the API bas
 
 ## Baseline detector
 
-RoBERTa-based detector from Hugging Face. We use it as a comparison baseline only; it’s not tuned for CRS or this domain.
+RoBERTa-based detector from Hugging Face.
 
 - Model: [Hello-SimpleAI/chatgpt-detector-roberta](https://huggingface.co/Hello-SimpleAI/chatgpt-detector-roberta)
 - Citation: [Hello-SimpleAI/HC3](https://huggingface.co/datasets/Hello-SimpleAI/HC3)
@@ -66,7 +66,7 @@ python -m authinfra detector-download
 python -m authinfra detector-infer --input path/to/file.txt
 ```
 
-Output is JSON: `model`, `runtime_sec`, `probability` (0–1 or `null` on error), `error`, `input_truncated`. If `error` is set, `probability` can be `null`; don’t treat 0.5 as a reliable cutoff.
+Output: JSON with `model`, `runtime_sec`, `probability` (0–1 or `null`), `error`, `input_truncated`.
 
 ---
 
@@ -169,8 +169,3 @@ For scripts that call external APIs: put keys in `data_helpers/api_keys.txt` (e.
 
 Outputs often go to `data_helpers/jsons`, `./clean_data`, `./gen_out` unless you pass `--out`. Install `tiktoken` for exact tokenization; otherwise scripts use whitespace.
 
----
-
-## Out of scope
-
-No training or fine-tuning in this repo. No accuracy or production guarantees for the detector, generation, or datasets.
