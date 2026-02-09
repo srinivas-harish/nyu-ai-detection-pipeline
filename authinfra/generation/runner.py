@@ -1,10 +1,13 @@
 """
 Generation job runner: human text -> prompt + model -> JSONL artifact.
 Errors captured explicitly per line. Dry-run produces placeholders.
+Optional parallel execution with bounded worker pool; output order is deterministic.
 """
 
 import json
+import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +16,13 @@ from authinfra.generation.adapters import BaseAdapter, DryRunAdapter, get_adapte
 from authinfra.generation.chunking import chunk_text
 from authinfra.generation.prompts import get_prompt, get_registry_version
 from authinfra.generation.schema import JSONLLine
+
+
+def _default_concurrency() -> int:
+    try:
+        return max(1, int(os.environ.get("AUTHINFRA_GENERATION_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
 
 
 def run_generation(
@@ -26,6 +36,7 @@ def run_generation(
     overlap_tokens: int = 32,
     dry_run: bool = True,
     job_id: str | None = None,
+    concurrency: int | None = None,
 ) -> tuple[int, int]:
     """
     Chunk input_text, run adapter per chunk, write one JSONL line per chunk.
@@ -85,12 +96,54 @@ def run_generation(
     written = 0
     errors = 0
     prompt_text = prompt_entry["text"]
+    workers = concurrency if concurrency is not None else _default_concurrency()
+    workers = max(1, min(workers, 32))
+
+    def do_chunk(index: int, ch: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        result = adapter.generate(prompt=prompt_text, text=ch["text"], input_token_count=ch.get("token_count"))
+        return (index, result)
+
+    if workers <= 1:
+        with open(path, "a", encoding="utf-8") as f:
+            for i, ch in enumerate(chunks):
+                _, result = do_chunk(i, ch)
+                err = result.get("error")
+                if err:
+                    errors += 1
+                out_line: JSONLLine = {
+                    "job_id": job_id,
+                    "timestamp_utc": ts,
+                    "chunk_index": i,
+                    "prompt_id": prompt_id,
+                    "prompt_version": prompt_entry["version"],
+                    "prompt_text": prompt_text,
+                    "model_id": result.get("model_id") or adapter.model_id,
+                    "input_token_count": result.get("input_token_count") or ch.get("token_count", 0),
+                    "output_text": result.get("output_text") if not err else None,
+                    "output_token_count": result.get("output_token_count"),
+                    "runtime_sec": result.get("runtime_sec"),
+                    "error": err,
+                    "dry_run": dry_run,
+                }
+                f.write(json.dumps(out_line, ensure_ascii=False) + "\n")
+                written += 1
+        return written, errors
+
+    results_by_index: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(do_chunk, i, ch): i for i, ch in enumerate(chunks)}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                i, result = fut.result()
+                results_by_index[i] = result
+            except Exception as e:
+                results_by_index[idx] = {"error": str(e), "model_id": adapter.model_id, "runtime_sec": 0.0}
 
     with open(path, "a", encoding="utf-8") as f:
-        for i, ch in enumerate(chunks):
-            full_prompt = f"{prompt_text}\n\n---\n\n{ch['text']}"
-            result = adapter.generate(prompt=prompt_text, text=ch["text"])
-
+        for i in range(len(chunks)):
+            result = results_by_index.get(i) or {"error": "worker did not return", "model_id": adapter.model_id}
+            ch = chunks[i]
             err = result.get("error")
             if err:
                 errors += 1

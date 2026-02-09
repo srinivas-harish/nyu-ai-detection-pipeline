@@ -109,25 +109,106 @@ def _parse_argv(args: list[str]) -> dict:
     return out
 
 
+def _collect_text_files(dir_path: Path) -> list[Path]:
+    """Recursively list .txt and .md files under dir_path."""
+    out: list[Path] = []
+    for ext in ("*.txt", "*.md"):
+        for p in dir_path.rglob(ext):
+            if p.is_file():
+                out.append(p)
+    return sorted(out)
+
+
 def _cmd_generate(argv: list[str]) -> int:
-    """Run generation job. --input PATH --output PATH [--prompt-id ID] [--model NAME] [--no-dry-run] [--min-tokens N] [--max-tokens N] [--overlap N]."""
+    """Run generation. --input_file PATH or --input_dir DIR (mutually exclusive), --output_path PATH. Optional: --concurrency N."""
     args = argv[1:]
     parsed = _parse_argv(args)
-    input_path = parsed.get("input")
-    output_path = parsed.get("output")
+    input_file = parsed.get("input_file") or parsed.get("input")
+    input_dir = parsed.get("input_dir")
+    output_path = parsed.get("output_path") or parsed.get("output")
     prompt_id = parsed.get("prompt_id", "1")
     model = parsed.get("model", "dry-run")
     dry_run = parsed.get("no_dry_run", "").lower() not in ("1", "true", "yes")
     min_tokens = int(parsed.get("min_tokens", "300"))
     max_tokens = int(parsed.get("max_tokens", "1000"))
     overlap = int(parsed.get("overlap", "32"))
+    concurrency = None
+    if parsed.get("concurrency"):
+        try:
+            concurrency = max(1, min(32, int(parsed["concurrency"])))
+        except ValueError:
+            pass
 
-    if not input_path or not output_path:
-        print(json.dumps({"error": "missing --input or --output", "usage": "generate --input PATH --output PATH [--prompt-id ID] [--model NAME] [--no-dry-run]"}))
+    if not output_path:
+        print(json.dumps({"error": "missing --output_path or --output"}))
         return 1
-    p = Path(input_path)
+    if input_file and input_dir:
+        print(json.dumps({"error": "use either --input_file or --input_dir, not both"}))
+        return 1
+    if not input_file and not input_dir:
+        print(json.dumps({"error": "missing --input_file or --input_dir (or --input for single file)"}))
+        return 1
+
+    from authinfra.generation.runner import run_generation
+
+    out_path = Path(output_path)
+    if input_dir:
+        in_dir = Path(input_dir)
+        if not in_dir.is_dir():
+            print(json.dumps({"error": f"input_dir not a directory: {input_dir}"}))
+            return 1
+        out_path.mkdir(parents=True, exist_ok=True)
+        files = _collect_text_files(in_dir)
+        if not files:
+            print(json.dumps({"error": "no .txt or .md files under input_dir", "input_dir": str(in_dir)}))
+            return 1
+        total_written = 0
+        total_errors = 0
+        aggregated_path = out_path / "aggregated.jsonl"
+        with open(aggregated_path, "w", encoding="utf-8") as agg_f:
+            for fp in files:
+                try:
+                    text = fp.read_text(encoding="utf-8", errors="replace")
+                except Exception as e:
+                    print(json.dumps({"file": str(fp), "error": str(e)}), file=sys.stderr)
+                    total_errors += 1
+                    continue
+                rel = fp.relative_to(in_dir)
+                out_name = rel.with_suffix(".jsonl").as_posix().replace("/", "_")
+                per_file_path = out_path / out_name
+                written, err_count = run_generation(
+                    text,
+                    prompt_id=prompt_id,
+                    model_name=model,
+                    output_path=per_file_path,
+                    min_tokens=min_tokens,
+                    max_tokens=max_tokens,
+                    overlap_tokens=overlap,
+                    dry_run=dry_run,
+                    concurrency=concurrency,
+                )
+                total_written += written
+                total_errors += err_count
+                with open(per_file_path, encoding="utf-8") as pf:
+                    for line in pf:
+                        if line.strip():
+                            agg_f.write(line)
+        summary = {
+            "mode": "mass",
+            "input_dir": str(in_dir),
+            "output_path": str(out_path),
+            "files_processed": len(files),
+            "lines_written": total_written,
+            "error_count": total_errors,
+            "aggregated": str(aggregated_path),
+            "dry_run": dry_run,
+        }
+        print(json.dumps(summary))
+        return 0 if total_errors == 0 else 1
+
+    p = Path(input_file)
     if not p.is_file():
-        print(json.dumps({"error": f"file not found: {input_path}"}))
+        print(json.dumps({"error": f"file not found: {input_file}"}))
         return 1
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
@@ -135,18 +216,24 @@ def _cmd_generate(argv: list[str]) -> int:
         print(json.dumps({"error": str(e)}))
         return 1
 
-    from authinfra.generation.runner import run_generation
+    if out_path.suffix.lower() == ".jsonl" or not out_path.exists() and out_path.suffix:
+        out_file = out_path
+    else:
+        out_path.mkdir(parents=True, exist_ok=True)
+        out_file = out_path / f"{p.stem}.jsonl"
+
     written, err_count = run_generation(
         text,
         prompt_id=prompt_id,
         model_name=model,
-        output_path=output_path,
+        output_path=out_file,
         min_tokens=min_tokens,
         max_tokens=max_tokens,
         overlap_tokens=overlap,
         dry_run=dry_run,
+        concurrency=concurrency,
     )
-    summary = {"output": output_path, "lines_written": written, "error_count": err_count, "dry_run": dry_run}
+    summary = {"output": str(out_file), "lines_written": written, "error_count": err_count, "dry_run": dry_run}
     print(json.dumps(summary))
     return 0 if err_count == 0 else 1
 

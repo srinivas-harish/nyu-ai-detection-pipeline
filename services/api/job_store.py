@@ -21,10 +21,10 @@ def _ensure_jobs_dir() -> Path:
     return JOBS_DIR
 
 
-def create_job(job_type: str, params: dict[str, Any]) -> dict[str, Any]:
-    """Create a pending job; return job record with job_id."""
+def create_job(job_type: str, params: dict[str, Any], job_id: str | None = None) -> dict[str, Any]:
+    """Create a pending job; return job record with job_id. Optional job_id for mass_convert."""
     _ensure_jobs_dir()
-    job_id = str(uuid.uuid4())[:12]
+    job_id = job_id or str(uuid.uuid4())[:12]
     now = datetime.now(timezone.utc).isoformat()
     job: dict[str, Any] = {
         "job_id": job_id,

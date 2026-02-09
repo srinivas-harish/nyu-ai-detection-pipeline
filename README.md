@@ -1,200 +1,180 @@
 # nyu-ai-detection-pipeline
 
-Pipeline and tools for domain-specific AI-text detection research, developed for  
-**NYU’s AI in Education Vertically Integrated Projects (VIP) team)**.
+Domain-specific AI-text detection research pipeline for **NYU AI in Education (VIP)**.  
+Scrape → filter → convert → (future: train). AuthInfra provides the detection scaffold: baseline model, generation, dataset compilation, and an operator UI—no training or fine-tuning in this repo.
 
-Structure:
-- `data_helpers/` – helper scripts (API runner, CRS scraper, filter/cleaner, conversions)
-- `data/` – raw and processed datasets
-- `notebooks/` – experiments and analysis
-- `authinfra/` – **AuthInfra** core library (scaffold: datasets, generation, detectors, inference, training stub, utils; CLI, logging, config)
-- `apps/web/` – **Web UI** (Next.js) operator console for generation, datasets, inference
-- `services/` – API (FastAPI) and worker (job runner) for generation, datasets, inference
-- `docs/` – documentation (see `docs/AUTHINFRA.md` for AuthInfra)
-- `artifacts/` – data artifacts output
+---
 
-Pipeline: scrape → filter → convert (loop + overlap) → train
+## Repo layout
 
-**AuthInfra** is a local scaffold for detection infrastructure. It includes a **baseline detector** (see below); it does **not** include training loops or fine-tuning. See `docs/AUTHINFRA.md` for what exists and what does not. Run: `python -m authinfra`
+| Path | Role |
+|------|------|
+| `authinfra/` | Core library: datasets, generation, detectors, inference (CLI + Python). Training is a stub. |
+| `apps/web/` | Next.js operator console: Generate, Datasets, Inference (dark UI). |
+| `services/` | FastAPI API + filesystem worker for generation and compile jobs (experimental, local only). |
+| `data_helpers/` | Scripts: CRS scraper, filter/cleaner, conversions, API runner. |
+| `data/` | Raw and processed inputs. |
+| `artifacts/` | Outputs: generation JSONL, compiled datasets, job state. |
+| `docs/` | [AUTHINFRA.md](docs/AUTHINFRA.md) — what exists; [LIMITATIONS_AND_STABILITY.md](docs/LIMITATIONS_AND_STABILITY.md) — behavior and limits. |
 
-### Baseline detector (AuthInfra)
+**Stack (relevant):** Python (authinfra), Next.js 14, FastAPI, Hugging Face (baseline detector), Google Generative AI (Gemini adapter). Generation is dry-run by default; Gemini 3 Pro adapter reads keys from `api_keys.md` locally only (never logged or transmitted).
 
-A pretrained AI-text detector is wired as a **baseline** for comparison. It is a dependency, not a claim of quality.
+---
 
-- **Model**: [Hello-SimpleAI/chatgpt-detector-roberta](https://huggingface.co/Hello-SimpleAI/chatgpt-detector-roberta) (Hugging Face).
-- **Dataset (citation)**: [Hello-SimpleAI/HC3](https://huggingface.co/datasets/Hello-SimpleAI/HC3) (Human ChatGPT Comparison Corpus).
+## Quick start: UI + inference
 
-**How to run**
+Get the UI up and run the baseline detector on pasted text. Inference is synchronous (no worker).
 
-1. Install deps (includes `transformers` and `torch`):  
-   `pip install -r requirements.txt`
-2. Download the model (first time):  
-   `python -m authinfra detector-download`
-3. Run inference on a text file:  
-   `python -m authinfra detector-infer --input path/to/file.txt`  
-   Output is JSON to stdout: `model`, `runtime_sec`, `probability` (0–1 when present, or null on error), `error` (if any), `input_truncated`.
+**Terminal 1 — API**
 
-**What this baseline does NOT guarantee**
+```bash
+pip install -r requirements.txt
+uvicorn services.api.main:app --host 0.0.0.0 --port 8000
+```
 
-- It is not tuned for CRS or other domain-specific text.
-- It may be wrong; treat it as a black box for comparison only.
-- It is not fine-tuned or trained in this repo; it can be swapped out later.
+**Terminal 2 — UI**
 
-### Generation pipeline (AuthInfra)
+```bash
+cd apps/web && npm install && NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
+```
 
-The generation system produces AI-equivalent text from human text for data creation. It is explicit, inspectable, and controllable. Partial failure is normal; errors are captured per line in the output.
+Open **http://localhost:3000/inference**, paste text, click **Run baseline detector**. First run may be slow while the detector model downloads.
 
-- **Prompt registry**: prompt IDs 1–10, versioned (`v1`). See `authinfra.generation.prompts`.
-- **Chunking**: min/max tokens, overlap; deterministic (same input → same chunks). Uses tiktoken if available, else whitespace.
-- **Adapters**: provider-agnostic base; dry-run adapter (no API); stubs for OpenAI, Anthropic, Gemini (not wired to APIs).
-- **Output**: JSONL, one line per chunk. Fields: `job_id`, `timestamp_utc`, `chunk_index`, `prompt_id`, `prompt_version`, `prompt_text`, `model_id`, `input_token_count`, `output_text`, `output_token_count`, `runtime_sec`, `error`, `dry_run`.
+*UI only (no backend):* `cd apps/web && npm run dev` — you’ll get a prompt to set the API base URL.
 
-**How to run**
+---
 
-- Dry-run (default; no API calls, placeholders only):  
-  `python -m authinfra generate --input path/to/text.txt --output path/to/out.jsonl`
-- With prompt and chunk params:  
-  `python -m authinfra generate --input in.txt --output out.jsonl --prompt-id 2 --model dry-run --min-tokens 300 --max-tokens 1000 --overlap 32`
-- Real API calls (when adapters are wired): add `--no-dry-run` and `--model openai` (or other). The generation pipeline does **not** read `data_helpers/api_keys.txt`; wiring an adapter to a provider (and keys) is separate. Currently non–dry-run adapters are stubs and return an error in each line.
+## Baseline detector
 
-**Dry-run vs real calls**
+Pretrained RoBERTa-based detector used as a **comparison baseline** only—not tuned for CRS or any domain; treat as a black box.
 
-- **Dry-run** (default): No external API is called. Each line gets a placeholder `output_text` and `dry_run: true`. Use to validate the pipeline, chunking, and schema.
-- **Real calls**: Set `--no-dry-run`. Requires an adapter that is actually connected to a provider; today those adapters are stubs and will write `error` on each line.
+- **Model:** [Hello-SimpleAI/chatgpt-detector-roberta](https://huggingface.co/Hello-SimpleAI/chatgpt-detector-roberta)
+- **Citation:** [Hello-SimpleAI/HC3](https://huggingface.co/datasets/Hello-SimpleAI/HC3)
 
-**What this does NOT validate**
+**CLI**
 
-- It does not check that prompts produce good or consistent output.
-- It does not check that model output is faithful to the source.
-- It does not evaluate detector quality or realism of generated text.
-- Provider adapters (OpenAI, Anthropic, Gemini) are stubs until wired to APIs.
+```bash
+pip install -r requirements.txt   # includes transformers, torch
+python -m authinfra detector-download
+python -m authinfra detector-infer --input path/to/file.txt
+```
 
-### Dataset compiler (AuthInfra)
+Output (stdout): JSON with `model`, `runtime_sec`, `probability` (0–1 or `null` on error), `error`, `input_truncated`.  
+**Caveat:** `probability` can be `null` when `error` is set; 0.5 may indicate failed label mapping—do not use for accuracy claims.
 
-The dataset compiler turns **generation JSONL artifacts** into a **folder dataset** with a manifest and train/valid splits. It is plumbing only; it does not evaluate quality or usefulness.
+---
 
-**What a “dataset” means here**
+## Generation pipeline
 
-- A **dataset** is a directory containing:
-  - `manifest.json` — schema version, source paths, selected model_ids and prompt_ids, filter_log (every exclusion reason and count), train/valid counts and paths, split_ratio, split_seed.
-  - `train.jsonl` — selected generation lines (same schema as generation output) assigned to train.
-  - `valid.jsonl` — same, assigned to valid.
-- Each line in train/valid is one generation record: **model output and metadata** (same schema as generation JSONL). The **human (input) chunk text** is not stored in the record; only the model’s output and fields like job_id, chunk_index, prompt_id, model_id are. Raw generation schema is preserved; no field is dropped.
+Chunk human text, apply a registered prompt and model adapter, write one JSONL line per chunk. Errors are per-line; dry-run is default (no API calls).
 
-**What assumptions are NOT made**
+- **Prompts:** Registry IDs 1–10, version `v1` (`authinfra.generation.prompts`).
+- **Chunking:** Min/max tokens, overlap; deterministic (tiktoken if available, else whitespace).
+- **Adapters:** Dry-run (no API); **Gemini 3 Pro** (wired; reads `GEMINI_API_KEY` from `api_keys.md`); stubs for OpenAI, Anthropic. **API keys:** Only `api_keys.md` at repo root (or `AUTHINFRA_API_KEYS_PATH`) is read for Gemini; keys are never logged, printed, or transmitted.
+- **Parallelism:** Bounded worker pool via `AUTHINFRA_GENERATION_CONCURRENCY` or `--concurrency N` (1–32). Output JSONL order is deterministic. Higher concurrency can hit rate limits; failures are captured per line.
+- **Output fields:** `job_id`, `timestamp_utc`, `chunk_index`, `prompt_id`, `prompt_version`, `prompt_text`, `model_id`, `input_token_count`, `output_text`, `output_token_count`, `runtime_sec`, `error`, `dry_run`.
 
-- No claim that the compiled dataset is balanced, fair, or suitable for training.
-- No sampling heuristics that assume correctness or quality.
-- No deletion or modification of raw artifacts; compilation only reads and writes to the output folder.
-- Selection is explicit: you specify which model_ids and prompt_ids to include; everything else is excluded and logged.
+**CLI (single file or mass)**
 
-**Reproducibility**
+```bash
+# Dry-run (default)
+python -m authinfra generate --input_file path/to/text.txt --output_path path/to/out.jsonl
 
-- Same source paths + same `--models`, `--prompts`, `--split-ratio`, and `--split-seed` produce the same manifest and the same train/valid split. The split is deterministic given the seed.
-- `manifest.json` records all of these so you can reproduce the dataset from the manifest metadata.
+# Gemini 3 Pro mass convert (folder → per-file JSONL + aggregated.jsonl)
+python -m authinfra generate --input_dir path/to/folder --output_path artifacts/generation/mass_out \
+  --model gemini --no-dry-run --prompt-id 1 --concurrency 4
+```
 
-**How to run**
+- **`--input_file`** (or **`--input`**): single input file. **`--input_dir`**: directory; all `.txt`/`.md` under it are converted (recursive). Use one of the two, not both.
+- **`--output_path`** (or **`--output`**): output file path, or directory for mass (writes `<name>.jsonl` per file and `aggregated.jsonl`).
+- **`--concurrency`**: chunk-level parallelism (default from `AUTHINFRA_GENERATION_CONCURRENCY`, else 1). No guarantee of speed; rate limits and timeouts can occur.
 
-- Compile:  
-  `python -m authinfra dataset-compile --name my_dataset --output-dir artifacts/datasets/my_dataset --inputs "path/to/gen1.jsonl path/to/gen2.jsonl" --models dry-run --prompts 1,3`
-- Omit `--models` / `--prompts` to include all models / all prompts from the sources.
-- Summary (counts only):  
-  `python -m authinfra dataset-summary --dataset-dir artifacts/datasets/my_dataset`
+---
 
-### Web UI (AuthInfra)
+## Dataset compiler
 
-Operator console under `apps/web/` (Next.js). Dark-mode default; restrained layout. Exposes system state and uncertainty; no fake progress or synthetic metrics.
+Turns generation JSONL into a **folder dataset**: `manifest.json`, `train.jsonl`, `valid.jsonl`. Deterministic split (seed); filter_log records every exclusion. No quality claims—plumbing only.
 
-**What the UI can do**
+- **Record content:** Model output + metadata (same schema as generation JSONL). The human (input) chunk text is *not* stored.
+- **Selection:** You specify `model_ids` and `prompt_ids`; everything else is excluded and logged.
 
-- **Generate**: Page to select prompt (ID + version), model, and (when wired) input texts; start a run. Prompt editing is explicit and versioned; generation status is shown as reported by the backend (no synthetic progress).
-- **Datasets**: Page to list compiled datasets and view manifest (filter log, counts). When backend is wired, list and manifest load from API.
-- **Inference**: Page to paste text (no file upload in UI) and run the baseline detector. Results show **probability** (0–1) and runtime, not binary judgments. Input-truncation and errors are shown.
+**CLI**
 
-**What it cannot do yet**
+```bash
+python -m authinfra dataset-compile --name my_dataset --output-dir artifacts/datasets/my_dataset \
+  --inputs "path/to/gen1.jsonl path/to/gen2.jsonl" --models dry-run --prompts 1,3
 
-- No file upload for generation inputs (paste only). No sentence-level inference (whole-text only; sentence-level is TODO). No authentication or multi-user support.
+python -m authinfra dataset-summary --dataset-dir artifacts/datasets/my_dataset
+```
 
-**Run the app**
+Omit `--models` / `--prompts` to include all. Same sources + same options + same seed ⇒ same manifest and split.
 
-- `cd apps/web && npm install && npm run dev` — serves at http://localhost:3000. To use real backend: run the API and worker (see **API and worker (local)** below) and set `NEXT_PUBLIC_API_BASE=http://localhost:8000` (or your API URL) before `npm run dev`.
+---
 
-### API and worker (local)
+## Web UI
 
-A minimal FastAPI service and a filesystem-based worker wire the Web UI to AuthInfra. All runs are local and reversible (artifacts on disk; no external queue).
+Next.js app: **Generate** (paste text, start run, poll status), **Datasets** (list + manifest), **Inference** (paste text, run detector). Dark theme; no synthetic progress. Paste-only input—no file upload. Compile is not in the UI (use API or CLI).
 
-**How to run API + worker locally**
+**Run with backend:** See [Quick start](#quick-start-ui--inference) for API + UI. For generation and compile jobs you also need the worker (next section).
 
-1. From **repo root**, install deps and run the API in one terminal:
-   ```bash
-   pip install -r requirements.txt
-   uvicorn services.api.main:app --host 0.0.0.0 --port 8000
-   ```
-2. In a **second** terminal (repo root), run the worker so generation and compile jobs are executed:
-   ```bash
-   python -m services.worker
-   ```
-3. Run the Web UI and point it at the API:
-   ```bash
-   cd apps/web && NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
-   ```
-   Open http://localhost:3000. Generate (paste input text), Datasets (list + manifest), and Inference (paste text, run detector) will call the API.
+**Run UI only**
 
-**What is synchronous vs async**
+```bash
+cd apps/web && npm install && npm run dev
+```
 
-- **Synchronous**: **Inference** — `POST /inference` runs the baseline detector in the API process and returns the result. No worker involved.
-- **Asynchronous (worker)**: **Generation** and **dataset compile** — API enqueues a job (writes to `artifacts/jobs/<job_id>.json`) and returns `job_id`. The worker polls the job dir, picks pending jobs, runs authinfra (generation or compile), and updates the job file. The UI polls `GET /jobs/<job_id>` until status is `completed` or `failed`.
+Serves http://localhost:3000. Set `NEXT_PUBLIC_API_BASE=http://localhost:8000` to hit the API.
 
-**Known failure points**
+---
 
-- **Job dir missing or not writable**: API health check (`GET /health`) and job creation will fail. Ensure `artifacts/jobs` exists or set `AUTHINFRA_JOBS_DIR` to a writable path.
-- **Worker not running**: Generation and compile jobs stay `pending` forever. Start the worker in a separate terminal.
-- **Inference (detector)**: First run downloads the Hugging Face model; network or disk errors surface as 500 and in the response `error` field. Empty input returns 400.
-- **Generation/compile paths**: Compile jobs require `input_paths` to existing generation JSONL files (e.g. under `artifacts/generation/`). If paths are wrong, the worker marks the job `failed` with an error.
-- **CORS**: API allows all origins for local use only.
+## API and worker (experimental)
 
-**Quick Setup**
+Local FastAPI service + one worker process. Job state and artifacts on disk; no external queue. **Experimental:** single worker, run from repo root, same env for API and worker.
 
-- API keys file: put keys in `data_helpers/api_keys.txt` :
-  - `GEMINI_API_KEY=...`
-  - `DEEPSEEK_API_KEY=...`
-  - `OPENAI_API_KEY=...`
-  - `CLAUDE_API_KEY=...`
-  - `GROK_API_KEY=...`
+**Full stack (API + worker + UI)**
 
+```bash
+# Terminal 1
+pip install -r requirements.txt && uvicorn services.api.main:app --host 0.0.0.0 --port 8000
 
-**Example Commands**
+# Terminal 2
+python -m services.worker
 
-- CRS scraping (raw JSON) – `data_helpers/crs_scraper.py`
-  - Grab 200 reports from EveryCRSReport CSV into a folder:
-    - `python data_helpers/crs_scraper.py --base https://www.everycrsreport.com/reports.csv --n 200 --out data/crs_jsons`
- 
+# Terminal 3
+cd apps/web && NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
+```
 
-- Clean + filter to CSV – `data_helpers/crs_filter.py`
-  - Keep CRS files with minimum 3,000 words; stop after 30 kept rows:
-    - `python data_helpers/crs_filter.py --json_dir data/crs_jsons --out data/clean --min_words 3000 --n 30`
-  - Or target a token budget (approx. words) instead of a row count:
-    - `python data_helpers/crs_filter.py --json_dir data/crs_jsons --out data/clean --min_words 3000 --target_tokens 200000`
-  - Writes chunked CSVs like `clean_0.csv`, `clean_1.csv` under `--out`.
- 
-- Mass conversion + sanity checks – `data_helpers/mass_conversion.py`
-  - Quick sanity check of your cleaned CSV folder:
-    - `python data_helpers/mass_conversion.py --input_csv_dir data/clean --sanity_only --min_words 3000`
-  - Note: large “source → single large AI” conversions are deprecated in this pipeline. Convert of sources to monolithic AI equivalents causes hallucination issues. And, this isn't the way most people use LLMs anyway.
+- **Sync:** Inference runs in the API process; no worker.
+- **Async:** Generation and dataset compile are enqueued; worker polls `artifacts/jobs/`, runs authinfra, updates job files; UI polls `GET /jobs/<id>`.
 
-- Training examples JSONL – `data_helpers/make_training_examples.py`
-  - Take a large AI text and turn it into many AI samples by chunking (and optionally rewriting via multiple models).
-  - If your AI text lives in a `.txt`, wrap it into a minimal CSV first (headers: `id,title,date,text`):
-    - ``printf 'id,title,date,text\nA1,AI-Doc,2025-01-01,"%s"\n' "$(cat path/to/ai_text.txt | tr '\r' '\n')" > data/ai_input.csv``
-  - Produce many samples from that AI text by chunking and calling several models:
-    - `python data_helpers/make_training_examples.py --input_csv data/ai_input.csv --token_budget 150000 --min_chunk 300 --max_chunk 1000 --overlap 32 --models "grok,chatgpt,deepseek,gemini-2.5-flash-lite" --temperature 0.4 --top_p 0.9 --out data/samples/train_examples.jsonl --keys data_helpers/api_keys.txt`
-  - Only chunk (no API calls yet), useful to scaffold samples quickly:
-    - `python data_helpers/make_training_examples.py --input_csv data/ai_input.csv --token_budget 80000 --min_chunk 300 --max_chunk 1000 --overlap 32 --models "grok" --dry_run --out data/samples/train_examples.jsonl`
-    - Note: `--dry_run` uses placeholders for outputs; rerun without `--dry_run` to populate actual model rewrites.
+**Failure points:** Job dir must be writable (`artifacts/jobs` or `AUTHINFRA_JOBS_DIR`). If the worker isn’t running, generation/compile stay pending. Compile `input_paths` must exist (e.g. under `artifacts/generation/`). CORS is open for local use.
 
+---
 
-**Notes**
-- Defaults: many scripts create sensible default folders (e.g., JSONs under `data_helpers/jsons`, cleaned CSVs under `./clean_data`, generated outputs under `./gen_out`). Set `--out` to keep things tidy in `data/`.
-- Word vs token counts: where exact tokenization is needed, install `tiktoken`; otherwise scripts fall back to whitespace word counts.
-- Please help optimize parallelizing API calls. 
-- Sampling design for training has to be improved. However, we'll do this after we have the first training run. 
+## Data helpers and keys
+
+**API keys** (for scripts that call providers): put in `data_helpers/api_keys.txt`, e.g.  
+`OPENAI_API_KEY=...`, `CLAUDE_API_KEY=...`, `GEMINI_API_KEY=...`, `DEEPSEEK_API_KEY=...`, `GROK_API_KEY=...`.  
+AuthInfra generation does *not* read this file; only data_helpers scripts that need keys do.
+
+**Example commands**
+
+- **CRS scrape:**  
+  `python data_helpers/crs_scraper.py --base https://www.everycrsreport.com/reports.csv --n 200 --out data/crs_jsons`
+- **Filter to CSV (min words, row cap):**  
+  `python data_helpers/crs_filter.py --json_dir data/crs_jsons --out data/clean --min_words 3000 --n 30`
+- **Filter by token budget:**  
+  `python data_helpers/crs_filter.py --json_dir data/crs_jsons --out data/clean --min_words 3000 --target_tokens 200000`
+- **Sanity check:**  
+  `python data_helpers/mass_conversion.py --input_csv_dir data/clean --sanity_only --min_words 3000`
+- **Training-style samples (chunk + optional multi-model rewrite):**  
+  `python data_helpers/make_training_examples.py --input_csv data/ai_input.csv --token_budget 150000 --min_chunk 300 --max_chunk 1000 --overlap 32 --models "grok,chatgpt,deepseek,gemini-2.5-flash-lite" --out data/samples/train_examples.jsonl --keys data_helpers/api_keys.txt`  
+  Use `--dry_run` to scaffold without API calls.
+
+Defaults: outputs often go to `data_helpers/jsons`, `./clean_data`, `./gen_out` unless you set `--out`. For exact tokenization, install `tiktoken`; otherwise scripts use whitespace.
+
+---
+
+## Out of scope
+
+Training and fine-tuning are not implemented. No accuracy or production guarantees for the detector, generation, or compiled datasets. See [docs/LIMITATIONS_AND_STABILITY.md](docs/LIMITATIONS_AND_STABILITY.md) for a concise summary of behavior and limits.

@@ -10,3 +10,6 @@ pydantic>=2.0
 # AuthInfra baseline detector (optional for data_helpers; required for detector-infer)
 transformers>=4.30.0
 torch>=2.0.0
+
+# Gemini adapter (B7) — keys from api_keys.md only, never logged
+google-generativeai>=0.8.0

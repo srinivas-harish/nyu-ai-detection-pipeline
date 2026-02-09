@@ -12,7 +12,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from fastapi import FastAPI, HTTPException
+import uuid
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -103,6 +104,53 @@ def start_generation(req: GenerateRequest):
         return {"job_id": job["job_id"], "status": "pending"}
     except Exception as e:
         logger.exception("job_create_failed", extra={"type": "generation"})
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/generate/mass")
+async def start_mass_convert(
+    output_path: str = Form(..., description="Output directory path"),
+    prompt_id: str = Form("1"),
+    model: str = Form("dry-run"),
+    files: list[UploadFile] = File(..., description="One or more .txt/.md files"),
+):
+    """Upload files and enqueue mass conversion. Returns job_id; poll GET /jobs/{job_id}."""
+    if not files:
+        raise HTTPException(status_code=400, detail="at least one file required")
+    job_id = str(uuid.uuid4())[:12]
+    mass_dir = ARTIFACTS_ROOT / "mass_input" / job_id
+    mass_dir.mkdir(parents=True, exist_ok=True)
+    input_paths: list[str] = []
+    try:
+        for f in files:
+            if not f.filename or not (f.filename.endswith(".txt") or f.filename.endswith(".md")):
+                continue
+            safe_name = f.filename.replace("..", "_").replace("/", "_")
+            out_path = mass_dir / safe_name
+            content = await f.read()
+            out_path.write_bytes(content)
+            input_paths.append(str(out_path.resolve()))
+        if not input_paths:
+            raise HTTPException(status_code=400, detail="no .txt or .md files in upload")
+        job = create_job(
+            "mass_convert",
+            {
+                "input_paths": input_paths,
+                "output_path": output_path,
+                "prompt_id": prompt_id,
+                "model": model,
+                "min_tokens": 300,
+                "max_tokens": 1000,
+                "overlap": 32,
+            },
+            job_id=job_id,
+        )
+        logger.info("job_created", extra={"job_id": job["job_id"], "type": "mass_convert", "files": len(input_paths)})
+        return {"job_id": job["job_id"], "status": "pending"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("job_create_failed", extra={"type": "mass_convert"})
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
