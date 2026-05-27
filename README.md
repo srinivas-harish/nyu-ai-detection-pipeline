@@ -1,171 +1,84 @@
-# nyu-ai-detection-pipeline
+# CRS provenance classifier
 
-Domain-specific AI-text detection pipeline (NYU AI in Education / VIP). Scrape, filter, convert. Baseline detector, generation pipeline, dataset compiler, operator UI.
+Six-class and five-class provenance classifiers over Congressional Research Service (CRS) report prose, trained to separate human-authored CRS text from paraphrases produced by five frontier LLMs. DeBERTa-v3-large with rank-16 LoRA adapters, fit on 50,737 balanced training chunks. Two of five providers carry a separable signature at this scale; three do not, and the classifier collapses uncertain predictions onto a joint HUMAN/GPT attractor.
 
-**Run the UI:**
+## Dataset
 
-```bash
-cd apps/web && npm install && npm run dev
-```
+Phase 1 downloaded 23,156 CRS reports from everycrsreport.com spanning 2010–2024, after which a 200-report stratified audit gated a second cleanup pass against orphan headers, HTML entities, and table captions. Phase 2 tokenized each cleaned body into 512-token sentence-aligned chunks using the RoBERTa-large tokenizer, yielding 507,729 human chunks indexed by report ID and publication year. Phase 3 sampled chunks for paraphrase generation through OpenRouter and direct provider APIs, producing roughly 10,000 paired (human-chunk, AI-paraphrase) records per provider against `claude-haiku-4.5`, `gpt-5.4-mini`, `grok-4.20`, `gemini-3-flash-preview`, and `deepseek-v4-flash`.
 
-Open http://localhost:3000. To use the detector or run generation jobs you need the API as well — see [Quick start: UI + inference](#quick-start-ui--inference).
+Phase 4 (`workspace/scripts/crs/phase4_repool.py`) pooled AI chunks across all years and split them randomly into 8,000+ train / 1,000 val / 500 test per class, while human chunks retained a temporal split (train 2010–2018, val 2019, test 2020) to preserve realistic distributional drift on the human side. The final compiled dataset at `workspace/data/compiled2/{train,val,test}.jsonl` contains 50,737 / 6,000 / 3,000 chunks, balanced to 8,000–8,599 per class in train and exactly 1,000 / 500 per class in val / test.
 
----
+## Training
+
+Backbone `microsoft/deberta-v3-large` in bf16, sequence length 256, batch 32, 3 epochs, learning rate 2e-5, warmup ratio 0.06, weight decay 0.01. PEFT LoRA at rank 16, alpha 32, dropout 0.05, with the classifier head fully trainable via `modules_to_save=["classifier","score","pooler"]`. Class-weighted cross-entropy compensates for the small HUMAN train imbalance (8,000 vs 8,500–8,599). Model A (six classes including HUMAN) and Model B (five classes, AI-only) trained in parallel on a single RTX 5090 in 9,262 s and 8,569 s respectively (~2h35m wall, 32GB used).
+
+## Results
+
+| class | 6-class P | R | F1 | 5-class P | R | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| HUMAN    | 0.273 | 0.374 | 0.316 | — | — | — |
+| CLAUDE   | 0.751 | 0.590 | 0.661 | 0.589 | 0.442 | 0.505 |
+| GPT      | 0.379 | 0.648 | 0.478 | 0.408 | 0.730 | 0.523 |
+| GROK     | 0.367 | 0.184 | 0.245 | 0.315 | 0.364 | 0.338 |
+| GEMINI   | 0.944 | 0.870 | 0.905 | 0.912 | 0.812 | 0.859 |
+| DEEPSEEK | 0.407 | 0.290 | 0.339 | 0.361 | 0.150 | 0.212 |
+| **macro** |  | 0.493 | **0.491** |  | 0.500 | **0.488** |
+| accuracy |  |  | 0.493 |  |  | 0.500 |
+| ECE      |  |  | 0.057 |  |  | 0.035 |
+| HUMAN→AI FPR |  |  | 0.626 |  |  | — |
+
+Confusion matrices (row-normalized) at `docs/figures/final_confusion_{6,5}class.png`; combined LaTeX report at `docs/results_combined.pdf`.
+
+![6-class confusion](docs/figures/final_confusion_6class.png)
+![5-class confusion](docs/figures/final_confusion_5class.png)
+
+## Findings
+
+**1. HUMAN and GPT act as joint attractor classes.** True-HUMAN samples land more often in the GPT bucket (46.4%) than in their own (37.4%); the GPT column absorbs 855 of 3,000 test predictions at precision 0.379, and the HUMAN column another 684 at precision 0.273. Off-diagonal mass concentrates in these two columns (1,028 of 2,500 non-self predictions), indicating that under uncertainty the classifier collapses onto whichever of HUMAN or GPT sits nearest the decision boundary for that chunk. Human CRS prose and GPT-paraphrased CRS prose occupy overlapping regions of feature space, with GPT serving as the generic-rewrite centroid that other providers' uncertain predictions also drift toward.
+
+**2. Gemini is the only provider with a separable signature.** F1 0.905 in six-class, 0.859 in five-class, with a 1.04% false-positive rate (26 of 2,500 non-Gemini samples predicted as Gemini). The signature survives removal of HUMAN, ruling out a HUMAN/AI-boundary artifact. `gemini-3-flash-preview` retains a distinctive surface style even when conditioned on neutral CRS source text.
+
+**3. Grok and DeepSeek lack identifying signal at this scale.** Recall 0.184 (Grok) and 0.290 (DeepSeek); F1 0.245 and 0.339. Grok samples flow predominantly into HUMAN (47.4%) and GPT (22%); DeepSeek samples spread across GPT (32.4%), HUMAN (17.2%), and Grok (11.2%). At 8,500 training chunks per class on DeBERTa-v3-large with sequence 256, these two providers produce paraphrases the classifier cannot reliably distinguish from one another or from the joint HUMAN/GPT centroid.
+
+**4. Removing HUMAN redistributes confusion without eliminating it.** Macro F1 shifts from 0.491 to 0.488 while per-class movements are large in both directions: CLAUDE −0.156, DEEPSEEK −0.127, GEMINI −0.046, GPT +0.045, GROK +0.093. The GROK→GPT cell rises from 110 to 272 and DEEPSEEK→GROK from 56 to 184, because the HUMAN bucket had been draining low-confidence GROK and DEEPSEEK predictions, and removing that drain spills the same mass onto the remaining AI classes. HUMAN was not the source of AI-vs-AI confusion; the confusion is structural to the paraphrase task.
 
 ## Repo layout
 
-| Path | What it is |
-|------|-------------|
-| `authinfra/` | Core lib: datasets, generation, detectors, inference (CLI + Python). |
-| `apps/web/` | Next.js UI: Generate, Datasets, Inference (dark theme). |
-| `services/` | FastAPI API + one worker for generation/compile. Local only. |
-| `data_helpers/` | Scripts: CRS scraper, filter, conversions, API runner. |
-| `data/` | Raw and processed input. |
-| `artifacts/` | Generation JSONL, compiled datasets, job state. |
-| `docs/` | Extra docs (if present). |
+| path | role |
+|---|---|
+| `workspace/scripts/crs/` | Pipeline phases 1–5 and `final_driver.sh` orchestrator |
+| `workspace/data/crs_raw/` | 23,156 raw CRS reports (HTML + JSON), 6.4 GB |
+| `workspace/data/crs_clean/` | Cleaned text bodies, 2.0 GB |
+| `workspace/data/chunks/` | 507K 512-token human chunks, 2.6 GB |
+| `workspace/data/generated/` | 54,460 paired AI paraphrases across 5 providers |
+| `workspace/data/compiled2/` | Balanced train/val/test JSONL (50,737 / 6,000 / 3,000) |
+| `workspace/models/checkpoints/crs_final_{6,5}class/seed42/best/` | LoRA adapters + tokenizer |
+| `workspace/models/eval/final_results_{6,5}class.json` | Test metrics + confusion matrices |
+| `workspace/outputs/results_combined.pdf` | Combined LaTeX report |
+| `authinfra/` | Library code (datasets, training, inference utilities) |
+| `docs/figures/`, `docs/results_combined.pdf` | Staged figures + report mirrored for this README |
 
-Stack: Python (authinfra), Next.js 14, FastAPI, Hugging Face (detector), Google Generative AI (Gemini). Generation is dry-run by default. Gemini reads `GEMINI_API_KEY` from `api_keys.md` at repo root (or `AUTHINFRA_API_KEYS_PATH`); we don’t log or send keys. For real Gemini you need `pip install -r requirements.txt` (includes `google-generativeai`).
+The `apps/web/`, `services/`, `attic/`, and `tests/` trees predate the CRS experiment and are not part of the live pipeline.
 
----
-
-## Quick start: UI + inference
-
-Two terminals.
-
-**Terminal 1 — API**
+## Reproducing
 
 ```bash
-pip install -r requirements.txt
-uvicorn services.api.main:app --host 0.0.0.0 --port 8000
+python3 workspace/scripts/crs/phase1_download.py
+python3 workspace/scripts/crs/phase1b_audit.py
+python3 workspace/scripts/crs/phase1c_postclean.py
+python3 workspace/scripts/crs/phase2_chunk.py
+python3 workspace/scripts/crs/phase3_or.py --provider {anthropic,openai,xai,google,deepseek}
+bash    workspace/scripts/crs/final_driver.sh   # phase4_repool + dual phase5 + combined PDF
 ```
 
-**Terminal 2 — UI**
+Provider keys live at `workspace/secrets.local` (gitignored). End-to-end generation cost $125.50 across direct provider APIs ($73.64) and an OpenRouter top-up ($51.86) for 54,460 paraphrases; training cost was zero, local on a single RTX 5090.
 
-```bash
-cd apps/web && npm install && NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
-```
-
-Go to http://localhost:3000/inference, paste text, hit “Run baseline detector”. First run can be slow while the model downloads.
-
-UI without backend: `cd apps/web && npm run dev` — it’ll ask for the API base URL.
-
----
-
-## Baseline detector
-
-RoBERTa-based detector from Hugging Face.
-
-- Model: [Hello-SimpleAI/chatgpt-detector-roberta](https://huggingface.co/Hello-SimpleAI/chatgpt-detector-roberta)
-- Citation: [Hello-SimpleAI/HC3](https://huggingface.co/datasets/Hello-SimpleAI/HC3)
-
-**CLI**
-
-```bash
-pip install -r requirements.txt   # transformers, torch
-python -m authinfra detector-download
-python -m authinfra detector-infer --input path/to/file.txt
-```
-
-Output: JSON with `model`, `runtime_sec`, `probability` (0–1 or `null`), `error`, `input_truncated`.
-
----
-
-## Generation pipeline
-
-Chunks text, runs a prompt + model adapter, writes one JSONL line per chunk. Default is dry-run (no API). Errors go on each line.
-
-- Prompts: registry IDs 1–10, version `v1` in `authinfra.generation.prompts`.
-- Chunking: min/max tokens, overlap; deterministic (tiktoken if present, else whitespace).
-- Adapters: dry-run; Gemini 3 Pro (reads `api_keys.md`); stubs for OpenAI/Anthropic. Keys only from `api_keys.md` / `AUTHINFRA_API_KEYS_PATH`, never logged.
-- Parallelism: `AUTHINFRA_GENERATION_CONCURRENCY` or `--concurrency N` (1–32). Order of lines is deterministic. Higher concurrency can hit rate limits.
-- JSONL fields: `job_id`, `timestamp_utc`, `chunk_index`, `prompt_id`, `prompt_version`, `prompt_text`, `model_id`, `input_token_count`, `output_text`, `output_token_count`, `runtime_sec`, `error`, `dry_run`.
-
-**CLI**
-
-```bash
-# Dry-run (default)
-python -m authinfra generate --input_file path/to/text.txt --output_path path/to/out.jsonl
-
-# Gemini mass convert (folder → per-file JSONL + aggregated.jsonl)
-python -m authinfra generate --input_dir path/to/folder --output_path artifacts/generation/mass_out \
-  --model gemini --no-dry-run --prompt-id 1 --concurrency 4
-```
-
-Use either `--input_file` (or `--input`) or `--input_dir`, not both. `--output_path`: file for single input, or directory for mass (writes one `.jsonl` per file plus `aggregated.jsonl`). `--concurrency` defaults from env or 1; rate limits and timeouts can still happen.
-
----
-
-## Dataset compiler
-
-Turns generation JSONL into a dataset folder: `manifest.json`, `train.jsonl`, `valid.jsonl`. Split is deterministic (seed); filter_log lists exclusions. Records are model output + metadata (same schema as generation); we don’t store the original human chunk text. You choose `model_ids` and `prompt_ids`; the rest are dropped and logged.
-
-**CLI**
-
-```bash
-python -m authinfra dataset-compile --name my_dataset --output-dir artifacts/datasets/my_dataset \
-  --inputs "path/to/gen1.jsonl path/to/gen2.jsonl" --models dry-run --prompts 1,3
-
-python -m authinfra dataset-summary --dataset-dir artifacts/datasets/my_dataset
-```
-
-Omit `--models` / `--prompts` to include everything. Same inputs + options + seed → same manifest and split.
-
----
-
-## Web UI
-
-Next.js: **Generate** (paste, run, poll), **Datasets** (list + manifest), **Inference** (paste, run detector). Dark theme, paste-only (no uploads). Compile isn’t in the UI; use API or CLI.
-
-With backend: [Quick start](#quick-start-ui--inference). For generation and compile you also need the worker (next section).
-
-UI only:
-
-```bash
-cd apps/web && npm install && npm run dev
-```
-
-Serves http://localhost:3000. Set `NEXT_PUBLIC_API_BASE=http://localhost:8000` to talk to the API.
-
----
-
-## API and worker
-
-FastAPI + one worker. Jobs and artifacts live on disk; no external queue. Single worker, run from repo root, same env for API and worker.
-
-**Full stack**
-
-```bash
-# Terminal 1
-pip install -r requirements.txt && uvicorn services.api.main:app --host 0.0.0.0 --port 8000
-
-# Terminal 2
-python -m services.worker
-
-# Terminal 3
-cd apps/web && NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
-```
-
-Inference runs in the API. Generation and compile go to the worker (polls `artifacts/jobs/`, runs authinfra, updates job files); UI polls `GET /jobs/<id>`. Job dir must be writable (`artifacts/jobs` or `AUTHINFRA_JOBS_DIR`). If the worker isn’t running, those jobs stay pending. Compile `input_paths` must exist. CORS is open for local use.
-
----
-
-## Data helpers and keys
-
-For scripts that call external APIs: put keys in `data_helpers/api_keys.txt` (e.g. `OPENAI_API_KEY=...`, `CLAUDE_API_KEY=...`, `GEMINI_API_KEY=...`, `DEEPSEEK_API_KEY=...`, `GROK_API_KEY=...`). AuthInfra generation does *not* use this file; only data_helpers scripts do.
-
-**Examples**
-
-- CRS scrape:  
-  `python data_helpers/crs_scraper.py --base https://www.everycrsreport.com/reports.csv --n 200 --out data/crs_jsons`
-- Filter to CSV:  
-  `python data_helpers/crs_filter.py --json_dir data/crs_jsons --out data/clean --min_words 3000 --n 30`
-- Filter by token budget:  
-  `python data_helpers/crs_filter.py --json_dir data/crs_jsons --out data/clean --min_words 3000 --target_tokens 200000`
-- Sanity check:  
-  `python data_helpers/mass_conversion.py --input_csv_dir data/clean --sanity_only --min_words 3000`
-- Training-style samples:  
-  `python data_helpers/make_training_examples.py --input_csv data/ai_input.csv --token_budget 150000 --min_chunk 300 --max_chunk 1000 --overlap 32 --models "grok,chatgpt,deepseek,gemini-2.5-flash-lite" --out data/samples/train_examples.jsonl --keys data_helpers/api_keys.txt`  
-  Use `--dry_run` to skip API calls.
-
-Outputs often go to `data_helpers/jsons`, `./clean_data`, `./gen_out` unless you pass `--out`. Install `tiktoken` for exact tokenization; otherwise scripts use whitespace.
-
+| provider | gens | cost |
+|---|---:|---:|
+| xai       | 10,000 | $52.54 |
+| anthropic | 14,223 | $39.55 |
+| openai    | 10,099 | $18.34 |
+| deepseek  | 10,039 | $9.64  |
+| google    | 10,099 | $5.43  |
+| training (RTX 5090, local) | — | $0.00 |
+| **total** | **54,460** | **$125.50** |
